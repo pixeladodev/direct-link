@@ -9,6 +9,9 @@ ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 ver=$(sed -n 's/^app_version=//p' "$ROOT/manifest" | head -n 1 | tr -d '\r')
 [ -n "$ver" ] || { echo "manifest needs app_version" >&2; exit 1; }
 
+# the pixel-ui library: the vendored copy, or a live working copy (PIXEL_UI_DIR=../pixel-ui)
+UI=$(CDPATH= cd -- "${PIXEL_UI_DIR:-$ROOT/vendor/pixel-ui}" && pwd) || { echo "no pixel-ui at ${PIXEL_UI_DIR:-vendor/pixel-ui}" >&2; exit 1; }
+
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 APP=$STAGE/direct-link
@@ -20,16 +23,18 @@ if [ -n "${CC:-}" ]; then
         SYS=$("$CC" -print-sysroot 2>/dev/null || true)
         [ -n "$SYS" ] && [ -d "$SYS/usr/include/libdrm" ] && DRM_INC="$SYS/usr/include/libdrm"
     fi
-    (cd "$ROOT" && "$CC" -O2 -Wall -Wextra ${DRM_INC:+-I"$DRM_INC"} -Icore -Icore/third_party -o "$APP/ui/direct-link" \
-        core/view.c core/cast.c core/pixel.c core/stb_impl.c frontends/linux-kms/main.c frontends/linux-kms/updater.c \
-        frontends/linux-kms/pixel_sound.c -ldrm -lm -ldl -lpthread)
+    (cd "$ROOT" && "$CC" -O2 -Wall -Wextra ${DRM_INC:+-I"$DRM_INC"} -Icore -I"$UI/include" -I"$UI/third_party" -o "$APP/ui/direct-link" \
+        core/view.c "$UI/src/cast.c" "$UI/src/pixel.c" "$UI/src/stb_impl.c" frontends/linux-kms/main.c \
+        "$UI/linux-kms/updater.c" "$UI/linux-kms/pixel_sound.c" -ldrm -lm -ldl -lpthread)
 elif docker image inspect bananads-build:1 >/dev/null 2>&1; then
-    docker run --rm --platform linux/amd64 -v "$ROOT:/src:ro" -v "$APP/ui:/out" -w /src bananads-build:1 \
+    # (a pixel-ui outside the app is mounted read-only beside it)
+    docker run --rm --platform linux/amd64 -v "$ROOT:/src:ro" -v "$UI:/pixel-ui:ro" -v "$APP/ui:/out" -w /src bananads-build:1 \
         /workspace/bananads-lan-test/aarch64--glibc--stable-2025.08-1/bin/aarch64-buildroot-linux-gnu-gcc \
         -O2 -Wall -Wextra \
         -I/workspace/bananads-lan-test/aarch64--glibc--stable-2025.08-1/aarch64-buildroot-linux-gnu/sysroot/usr/include/libdrm \
-        -Icore -Icore/third_party -o /out/direct-link \
-        core/view.c core/cast.c core/pixel.c core/stb_impl.c frontends/linux-kms/main.c frontends/linux-kms/updater.c frontends/linux-kms/pixel_sound.c -ldrm -lm -ldl -lpthread
+        -Icore -I/pixel-ui/include -I/pixel-ui/third_party -o /out/direct-link \
+        core/view.c /pixel-ui/src/cast.c /pixel-ui/src/pixel.c /pixel-ui/src/stb_impl.c frontends/linux-kms/main.c \
+        /pixel-ui/linux-kms/updater.c /pixel-ui/linux-kms/pixel_sound.c -ldrm -lm -ldl -lpthread
 else
     echo "set CC to an aarch64 gcc with libdrm, or build where bananads-build:1 exists" >&2
     exit 1

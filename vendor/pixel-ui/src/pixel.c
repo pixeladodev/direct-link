@@ -173,7 +173,7 @@ static void th_str(Th *t, char *out, size_t n)
 static int th_keep(const char *k)
 {
     return !strcmp(k, "base") || !strcmp(k, "name") || !strncmp(k, "accent", 6) || !strncmp(k, "colors.", 7) ||
-           !strcmp(k, "background.dither");
+           !strcmp(k, "background.dither") || !strncmp(k, "sounds.", 7);
 }
 
 static void th_put(Th *t, const char *k, const char *v)
@@ -325,9 +325,60 @@ int px_theme_sound(const PxSettings *st, const char *name, char *out, size_t n)
         slash = strrchr(path, '/');
         snprintf(out, n, "%.*s/%s", slash ? (int)(slash - path) : 1, slash ? path : ".", v);
     }
-    if (!(f = fopen(out, "rb"))) return 0;
+    if (!(f = fopen(out, "rb"))) return 0;    /* (a file that isn't there: the menu's own, as banana-ui does) */
     fclose(f);
     return 1;
+}
+
+/* ---- held buttons ------------------------------------------------------------------------------------------ */
+
+void px_repeat_key(PxRepeat *r, int code, int value, int repeatable, long now_ms)
+{
+    if (value == 1) {
+        if (repeatable) { r->code = code; r->since = r->last = now_ms; }
+        else r->code = 0;
+    } else if (value == 0 && code == r->code) r->code = 0;
+}
+
+static long rep_gap(const PxRepeat *r, long now_ms) { return now_ms - r->since > 1500 ? 60 : 120; }
+
+int px_repeat_due(PxRepeat *r, long now_ms)
+{
+    if (!r->code || now_ms - r->since < 400 || now_ms - r->last < rep_gap(r, now_ms)) return 0;
+    r->last = now_ms;
+    return r->code;
+}
+
+int px_repeat_wait(const PxRepeat *r, long now_ms)
+{
+    long w;
+    if (!r->code) return -1;
+    if (now_ms - r->since < 400) return (int)(400 - (now_ms - r->since));
+    w = r->last + rep_gap(r, now_ms) - now_ms;
+    return w < 0 ? 0 : (int)w;
+}
+
+static long page_gap(const PxRepeat *r, long now_ms) { return now_ms - r->since > 1500 ? 75 : 145; }
+
+int px_repeat_due_page(PxRepeat *r, long now_ms)
+{
+    if (!r->code || now_ms - r->since < 400 || now_ms - r->last < page_gap(r, now_ms)) return 0;
+    r->last = now_ms;
+    return r->code;
+}
+
+int px_repeat_wait_page(const PxRepeat *r, long now_ms)
+{
+    long w;
+    if (!r->code) return -1;
+    if (now_ms - r->since < 400) return (int)(400 - (now_ms - r->since));
+    w = r->last + page_gap(r, now_ms) - now_ms;
+    return w < 0 ? 0 : (int)w;
+}
+
+void px_fav_mark(PxCanvas *c, float x, float y, float s)
+{
+    px_rect(c, x, y, s, s, px.red);
 }
 
 void px_pal_make(PxPal *p, const PxSettings *st)
@@ -377,6 +428,7 @@ void px_pal_make(PxPal *p, const PxSettings *st)
         p->chip_band = 0x2e2b33; p->chip_body = 0x121117; p->rail_bg = 0x100f14; p->rule = 0x45403d;
         p->brand_bg = 0x262219; p->kbd_bg = 0xf1ede2; p->kbd_ink = 0x17161c;
         p->red = 0xff3b4a;
+        p->fav_border = p->red; p->fav_band = 0x5a2430; p->fav_body = 0x2a1016; p->fav_ink = 0xff8a96;
         p->dither_rgb = 0xffffff; p->dither_a = 36; p->dither_b = 18;
         sheet_base = 0x15141a; sheet_mix = 0.34f;
         p->pick_edge = 0xffffff;
@@ -388,6 +440,7 @@ void px_pal_make(PxPal *p, const PxSettings *st)
         p->chip_band = 0xffffff; p->chip_body = 0xf6f2ea; p->rail_bg = 0xe6dfd0; p->rule = 0xd6cfc0;
         p->brand_bg = 0x262219; p->kbd_bg = 0x3a342c; p->kbd_ink = 0xf2f6fa;
         p->red = 0xe23b4a;
+        p->fav_border = p->red; p->fav_band = 0xfff2f3; p->fav_body = 0xffdfe3; p->fav_ink = 0xc8283a;
         p->dither_rgb = 0x3a2e14; p->dither_a = 18; p->dither_b = 9;
         sheet_base = 0xfdfbf6; sheet_mix = 0.3f;
         p->pick_edge = a.dark;
@@ -428,27 +481,6 @@ void px_pal_make(PxPal *p, const PxSettings *st)
 
 static const PxTr *g_tr, *g_tr2;
 static char g_lang[16] = "en";
-
-/* Pixelado's design system (pixelado-party/design/tokens.json, theme "night"): navy surfaces, Pixel blue, pixel
-   corners. Not the menu's theme: the app looks the same whatever BananaOS's theme is. */
-void px_pal_pixelado(PxPal *p)
-{
-    memset(p, 0, sizeof *p);
-    p->light = 0;
-    p->ink = 0xEAF0FF; p->muted = 0x9AA8D6; p->line = 0x2B3C7A; p->edge = 0x5E73B8; p->dim = 0x5E73B8;
-    p->screen_bg = 0x0B1124; p->screen_frame = 0x070B17; p->screen_band = 0x16214A;
-    p->panel_band = 0x1F2D61; p->panel_body = 0x16214A; p->panel_low = 0x070B17;
-    p->bubble_band = 0x1F2D61; p->bubble_body = 0x101833; p->bubble_low = 0x070B17;
-    p->chip_band = 0x1F2D61; p->chip_body = 0x16214A; p->rail_bg = 0x0B1124; p->rule = 0x2B3C7A;
-    p->brand_bg = 0x16214A; p->kbd_bg = 0xEAF0FF; p->kbd_ink = 0x070B17;
-    p->red = 0xFF4F6E; p->green = 0x5EDB8A; p->warn = 0xFFC24A; p->sheet = 0x101833;
-    p->accent.base = 0x3D7DFF; p->accent.light = 0x9CBEFF; p->accent.dark = 0x1A3C99;
-    p->accent.band = 0x6E9BFF; p->accent.low = 0x2C5FD6;
-    p->pick = 0x3D7DFF; p->pick_band = 0x6E9BFF; p->pick_low = 0x1A3C99; p->pick_edge = 0x9CBEFF;
-    p->on_pick = 0x070B17; p->on_pick_sub = 0x16214A;
-    p->dither_rgb = 0x9CBEFF; p->dither_a = 22; p->dither_b = 11;
-    px_pixel_corners = 1;
-}
 
 void px_lang_set(const char *code, const PxTr *table)
 {
@@ -511,6 +543,30 @@ static unsigned char *read_file(const char *path)
     if (b && fread(b, 1, (size_t)n, f) != (size_t)n) { free(b); b = NULL; }
     fclose(f);
     return b;
+}
+
+/* Pixelado's design system (tokens/tokens.json, theme "night"): navy surfaces, Pixel blue, pixel
+   corners. Not the menu's theme: the app looks the same whatever BananaOS's theme is. */
+void px_pal_pixelado(PxPal *p)
+{
+    memset(p, 0, sizeof *p);
+    p->light = 0;
+    p->ink = 0xEAF0FF; p->muted = 0x9AA8D6; p->line = 0x2B3C7A; p->edge = 0x5E73B8; p->dim = 0x5E73B8;
+    p->screen_bg = 0x0B1124; p->screen_frame = 0x070B17; p->screen_band = 0x16214A;
+    p->panel_band = 0x1F2D61; p->panel_body = 0x16214A; p->panel_low = 0x070B17;
+    p->bubble_band = 0x1F2D61; p->bubble_body = 0x101833; p->bubble_low = 0x070B17;
+    p->chip_band = 0x1F2D61; p->chip_body = 0x16214A; p->rail_bg = 0x0B1124; p->rule = 0x2B3C7A;
+    p->brand_bg = 0x16214A; p->kbd_bg = 0xEAF0FF; p->kbd_ink = 0x070B17;
+    p->red = 0xFF4F6E; p->green = 0x5EDB8A; p->warn = 0xFFC24A; p->sheet = 0x101833;
+    p->accent.base = 0x3D7DFF; p->accent.light = 0x9CBEFF; p->accent.dark = 0x1A3C99;
+    p->accent.band = 0x6E9BFF; p->accent.low = 0x2C5FD6;
+    p->pick = 0x3D7DFF; p->pick_band = 0x6E9BFF; p->pick_low = 0x1A3C99; p->pick_edge = 0x9CBEFF;
+    p->on_pick = 0x070B17; p->on_pick_sub = 0x16214A;
+    p->dither_rgb = 0x9CBEFF; p->dither_a = 22; p->dither_b = 11;
+    /* the red family from status.bad: the quiet tinted look of the danger badge (the face is solid, see px_face) */
+    p->fav_border = p->red; p->fav_band = px_mix(p->red, 0x000000, 0.55f); p->fav_body = px_mix(p->red, 0x000000, 0.78f);
+    p->fav_ink = px_mix(p->red, 0xffffff, 0.55f);
+    px_pixel_corners = 1;
 }
 
 /* the first folder with the fonts: PIXEL_UI_FONTS, the system's (BananaOS: /usr/share/banana/rnds/fonts), then the
@@ -670,10 +726,71 @@ float px_text_w(const PxCanvas *c, int face, float size, const char *s, int flag
     return text_px(c, face, size, s, flags, NULL) / c->s;
 }
 
+static int g_clip_on, g_clip_x0, g_clip_y0, g_clip_x1, g_clip_y1;
+static int g_text_skip;
+static int g_mq_wake = -1;
+static char g_mq_key[256];
+static double g_mq_since;
+static int g_mq_seeded;
+
+static void clip_push(PxCanvas *c, float x, float y, float w, float h)
+{
+    int x0 = px_u(c, x), y0 = px_u(c, y), x1 = px_u(c, x + w), y1 = px_u(c, y + h);
+    g_clip_on = 1;
+    g_clip_x0 = x0 < 0 ? 0 : x0;
+    g_clip_y0 = y0 < 0 ? 0 : y0;
+    g_clip_x1 = x1 > c->w ? c->w : x1;
+    g_clip_y1 = y1 > c->h ? c->h : y1;
+}
+
+static void clip_pop(void) { g_clip_on = 0; }
+
+static double px_mono_ms(void)
+{
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;
+    return (double)ts.tv_sec * 1000.0 + (double)ts.tv_nsec / 1e6;
+}
+
+static float mq_offset(double elapsed, float overflow, int *moving)
+{
+    const double pause = 1500.0, speed = 36.0;
+    double run, cycle, t, wake;
+    if (overflow <= 0) return 0;
+    run = (double)overflow / speed * 1000.0;
+    cycle = pause + run + pause;
+    t = fmod(elapsed < 0 ? 0 : elapsed, cycle);
+    wake = -1;
+    if (t < pause) {
+        wake = pause - t;
+        g_mq_wake = (int)lround(wake);
+        return 0;
+    }
+    t -= pause;
+    if (t < run) {
+        if (moving) *moving = 1;
+        g_mq_wake = 0;
+        return (float)(t / 1000.0 * speed);
+    }
+    wake = pause - (t - run);
+    g_mq_wake = (int)lround(wake);
+    return overflow;
+}
+
+int px_marquee_wake_ms(void) { return g_mq_wake; }
+
+void px_marquee_reset(void)
+{
+    g_mq_key[0] = 0;
+    g_mq_wake = -1;
+    g_mq_seeded = 0;
+}
+
 static void blend(PxCanvas *c, int x, int y, uint32_t rgb, int a)
 {
     uint32_t *p, d;
     if (a <= 0 || x < 0 || y < 0 || x >= c->w || y >= c->h) return;
+    if (g_clip_on && (x < g_clip_x0 || x >= g_clip_x1 || y < g_clip_y0 || y >= g_clip_y1)) return;
     p = &c->px[(size_t)y * (size_t)c->w + (size_t)x];
     if (a >= 255) { *p = rgb; return; }
     d = *p;
@@ -687,6 +804,7 @@ static void blend(PxCanvas *c, int x, int y, uint32_t rgb, int a)
 float px_text(PxCanvas *c, int face, float size, float x, float y, const char *s, uint32_t rgb, int flags)
 {
     Slot *sl;
+    if (g_text_skip) return px_text_w(c, face, size, s, flags);
     int e8 = em8(c, size), X = px_u(c, x), Y = px_u(c, y), track, n = 0, x0, prev = 0;
     face = face_for(c, face, e8);
     if (!g_font_ok[face] || e8 < 32) return 0;
@@ -755,6 +873,46 @@ float px_text_fit(PxCanvas *c, int face, float size, float x, float y, const cha
     return px_text(c, face, size, x, y, buf, rgb, flags);
 }
 
+void px_marquee_begin(void) { g_mq_wake = -1; }
+
+int px_marquee_consume_seed(void)
+{
+    int s = g_mq_seeded;
+    g_mq_seeded = 0;
+    return s;
+}
+
+void px_marquee_preview(const char *s, double elapsed_ms)
+{
+    put(g_mq_key, sizeof g_mq_key, s);
+    g_mq_since = px_mono_ms() - elapsed_ms;
+    g_mq_wake = 0;
+    g_mq_seeded = 1;
+}
+
+float px_text_label(PxCanvas *c, int face, float size, float x, float y, const char *s, uint32_t rgb, int flags,
+                    float max_w, int picked)
+{
+    float full = px_text_w(c, face, size, s, flags), fit = max_w;
+    if (full <= fit)
+        return px_text(c, face, size, x, y, s, rgb, flags);
+    if (!picked)
+        return px_text_fit(c, face, size, x, y, s, rgb, flags, fit, PX_LEFT);
+    if (strcmp(g_mq_key, s)) {
+        put(g_mq_key, sizeof g_mq_key, s);
+        g_mq_since = px_mono_ms();
+    }
+    {
+        int moving = 0;
+        float off = mq_offset(px_mono_ms() - g_mq_since, full - fit, &moving);
+        clip_push(c, x, y - 2, fit, size * 1.45f);
+        px_text(c, face, size, x - off, y, s, rgb, flags);
+        clip_pop();
+        (void)moving;
+    }
+    return full < fit ? full : fit;
+}
+
 int px_text_wrap(PxCanvas *c, int face, float size, float x, float y, const char *s, uint32_t rgb, float max_w,
                  int max_lines, float line_h)
 {
@@ -765,7 +923,15 @@ int px_text_wrap(PxCanvas *c, int face, float size, float x, float y, const char
         size_t k = 0;
         char trial[400];
         while (*s == ' ') s++;
-        while (*s && *s != ' ' && k + 1 < sizeof word) word[k++] = *s++;
+        if (*s == '\n') {
+            s++;
+            if (!line[0]) continue;
+            px_text_fit(c, face, size, x, y + lines * line_h, line, rgb, 0, max_w, PX_LEFT);
+            lines++;
+            line[0] = 0;
+            continue;
+        }
+        while (*s && *s != ' ' && *s != '\n' && k + 1 < sizeof word) word[k++] = *s++;
         word[k] = 0;
         if (!k) break;
         snprintf(trial, sizeof trial, "%s%s%s", line, line[0] ? " " : "", word);
@@ -778,12 +944,141 @@ int px_text_wrap(PxCanvas *c, int face, float size, float x, float y, const char
             lines++;
             put(line, sizeof line, word);
         } else put(line, sizeof line, trial);
+        if (*s == '\n') {
+            s++;
+            px_text_fit(c, face, size, x, y + lines * line_h, line, rgb, 0, max_w, PX_LEFT);
+            lines++;
+            line[0] = 0;
+        }
     }
     if (line[0] && lines < max_lines) {
         px_text_fit(c, face, size, x, y + lines * line_h, line, rgb, 0, max_w, PX_LEFT);
         lines++;
     }
     return lines;
+}
+
+/* how many lines px_text_wrap will use, without drawing */
+int px_text_lines(const PxCanvas *c, int face, float size, const char *s, float max_w, int max_lines, float line_h)
+{
+    int n;
+    g_text_skip = 1;
+    n = px_text_wrap((PxCanvas *)c, face, size, 0, 0, s, 0, max_w, max_lines, line_h);
+    g_text_skip = 0;
+    return n;
+}
+
+/* BananaOS's cover shine: a slanted band for 560 ms. The first pass starts 1 s after the item is
+   selected; the next ones start every 5 s. */
+static double g_shine_at = -1;
+static double g_shine_next = -1;
+static double g_shine_epoch = -1;
+static int g_shine_x, g_shine_y, g_shine_w, g_shine_h;
+
+void px_cover_shine_preview(double ms) { g_shine_at = ms; }
+
+void px_cover_shine_reset(void) { g_shine_epoch = px_mono_ms(); }
+
+int px_cover_shine_wake_ms(void)
+{
+    double d;
+    if (g_shine_next < 0) return -1;
+    d = g_shine_next - px_mono_ms();
+    if (d <= 0) return 0;
+    if (d > 7000) return -1;
+    return (int)d;
+}
+
+int px_cover_shine_armed(int *x, int *y, int *w, int *h)
+{
+    if (g_shine_w < 2 || g_shine_h < 2) return 0;
+    if (x) *x = g_shine_x;
+    if (y) *y = g_shine_y;
+    if (w) *w = g_shine_w;
+    if (h) *h = g_shine_h;
+    return 1;
+}
+
+/* 1 while the band is on the cover. k is 0..1 across the sweep. wait is ms until the next change. */
+static int shine_on(double now, float *k, double *wait)
+{
+    const double lead = 1000, period = 5000, sweep = 560;
+    double elapsed, phase;
+    if (g_shine_at >= 0)
+        elapsed = g_shine_at;
+    else {
+        if (g_shine_epoch < 0) g_shine_epoch = now;
+        elapsed = now - g_shine_epoch;
+    }
+    if (elapsed < lead) {
+        if (wait) *wait = lead - elapsed;
+        return 0;
+    }
+    phase = fmod(elapsed - lead, period);
+    if (phase < sweep) {
+        if (k) *k = (float)(phase / sweep);
+        if (wait) *wait = 8;
+        return 1;
+    }
+    if (wait) *wait = period - phase;
+    return 0;
+}
+
+static void shine_schedule(double now)
+{
+    double wait = 0;
+    if (g_shine_at >= 0) { g_shine_next = -1; return; }
+    shine_on(now, NULL, &wait);
+    g_shine_next = now + (wait < 1 ? 1 : wait);
+}
+
+static void shine_band(PxCanvas *c, int x, int y, int w, int h, float k)
+{
+    int band, slant, gw, yy, a_hi, a_lo, gx0;
+    if (!c || w < 2 || h < 2) return;
+    band = px_u(c, 22);
+    if (band < 2) band = 2;
+    slant = (int)lround(h * 0.45);
+    gw = band + slant;
+    gx0 = x - gw + (int)lround((w + gw) * k);
+    a_hi = px.light ? 115 : 71;
+    a_lo = px.light ? 68 : 42;
+    for (yy = 0; yy < h; yy++) {
+        int ypx = y + yy, x0, i;
+        if (ypx < 0 || ypx >= c->h) continue;
+        x0 = slant - (int)lround((float)yy * slant / h);
+        for (i = 0; i < band; i++) {
+            int xx = gx0 + x0 + i;
+            if (xx < x || xx >= x + w || xx < 0 || xx >= c->w) continue;
+            blend(c, xx, ypx, 0xffffff, i < band / 3 ? a_lo : a_hi);
+        }
+    }
+}
+
+void px_cover_shine(PxCanvas *c, int x, int y, int w, int h)
+{
+    double now;
+    float k = 0;
+    g_shine_x = x;
+    g_shine_y = y;
+    g_shine_w = w;
+    g_shine_h = h;
+    if (!c || w < 2 || h < 2) { g_shine_w = 0; g_shine_next = -1; return; }
+    now = g_shine_at >= 0 ? g_shine_at : px_mono_ms();
+    shine_schedule(g_shine_at >= 0 ? px_mono_ms() : now);
+    /* A still paints here. Live frames paint after the clean cover is kept, so the sweep can
+       move without redrawing both screens. */
+    if (g_shine_at >= 0 && shine_on(now, &k, NULL)) shine_band(c, x, y, w, h, k);
+}
+
+void px_cover_shine_paint(PxCanvas *c)
+{
+    double now;
+    float k = 0;
+    if (!c || g_shine_w < 2) return;
+    now = px_mono_ms();
+    shine_schedule(now);
+    if (shine_on(now, &k, NULL)) shine_band(c, g_shine_x, g_shine_y, g_shine_w, g_shine_h, k);
 }
 
 /* ---- shapes (the Activity app's box painter) --------------------------------------------------------------- */
@@ -944,6 +1239,7 @@ void px_triangle(PxCanvas *c, float cx, float cy, float size, int dir, uint32_t 
     for (i = 0; i < n; i++) {
         if (dir == -1) fill_px(c, X - n / 2 + i, Y - i, 1, 2 * i + 1, rgb, 255);
         else if (dir == 1) fill_px(c, X + n / 2 - i, Y - i, 1, 2 * i + 1, rgb, 255);
+        else if (dir < 0) fill_px(c, X - i, Y - n / 2 + i, 2 * i + 1, 1, rgb, 255);
         else fill_px(c, X - i, Y + n / 2 - i, 2 * i + 1, 1, rgb, 255);
     }
 }
@@ -1020,8 +1316,26 @@ void px_chip(PxCanvas *c, float x, float y, float w, float h, int active)
     box(c, x, y, w, h, &b);
 }
 
-/* the state badge on the top panel: a lamp and a word in capitals, green (on), grey (off), the accent (on its way)
-   or red (can't) */
+/* text, border and fill from one colour: the badge and the primary/danger legend buttons */
+static void tone_of(uint32_t base, uint32_t *fill, uint32_t *border, uint32_t *band, uint32_t *ink)
+{
+    int i;
+    if (px.light) {
+        *fill = px_mix(base, 0xffffff, 0.78f);
+        *band = px_mix(base, 0xffffff, 0.90f);
+        *border = px_mix(base, 0x000000, 0.25f);
+        *ink = px_mix(base, 0x000000, 0.45f);
+    } else {
+        *fill = px_mix(base, 0x000000, 0.78f);
+        *band = px_mix(base, 0x000000, 0.55f);
+        *border = base;
+        *ink = px_mix(base, 0xffffff, 0.55f);
+    }
+    for (i = 0; i < 8 && contrast(*ink, *fill) < 4.0f; i++)
+        *ink = px_mix(*ink, px.light ? 0x000000 : 0xffffff, 0.18f);
+}
+
+/* the state badge on the top panel: a lamp and a word in capitals */
 static float badge_w(const PxCanvas *c, float h, const char *text, int dots)
 {
     char full[200];
@@ -1043,27 +1357,37 @@ float px_badge_dots(PxCanvas *c, float x, float y, float h, const char *text, in
 {
     Box b;
     float w = badge_w(c, h, text, dots), size = h * 0.5f, lamp = h * 0.36f, lx = x + h * 0.5f;
-    uint32_t fill, band, low, edge, lamp_on, ink;
+    uint32_t fill, band, low, edge, lamp_on, ink, base;
     switch (kind) {
-    case PX_BADGE_ON:
-        fill = px.green; band = px_mix(px.green, 0xffffff, 0.3f); low = px_mix(px.green, 0, 0.3f);
-        lamp_on = px_mix(px.green, 0xffffff, 0.75f);
-        break;
-    case PX_BADGE_BUSY:
-        fill = px.accent.base; band = px.accent.band; low = px.accent.low; lamp_on = px.accent.light;
-        break;
-    case PX_BADGE_WARN:
-        fill = px.red; band = px_mix(px.red, 0xffffff, 0.3f); low = px_mix(px.red, 0, 0.3f);
-        lamp_on = px_mix(px.red, 0xffffff, 0.7f);
-        break;
-    default:
-        fill = px_pixel_corners ? px.line : px.light ? 0xb9b2a5 : 0x56525c;
-        band = px_mix(fill, 0xffffff, 0.22f); low = px_mix(fill, 0, 0.28f);
-        lamp_on = px_pixel_corners ? px.screen_bg : px.light ? 0x8a8478 : 0x2a282e;
-        break;
+    case PX_BADGE_SUCCESS: base = px.green; break;
+    case PX_BADGE_WARNING: base = px.light ? 0xc4841a : 0xe0a030; break;
+    case PX_BADGE_DANGER: base = px.red; break;
+    case PX_BADGE_INFO: base = px.light ? 0x1d6fbf : 0x4aa3e8; break;
+    case PX_BADGE_PRIMARY: base = px.accent.base; break;
+    default: base = 0; break;
     }
-    edge = px.light ? px_mix(fill, 0, 0.55f) : px_mix(fill, 0xffffff, 0.55f);
-    ink = px_ink_on(fill);
+    if (!base) {
+        fill = px_pixel_corners ? px.line : px.light ? 0xb9b2a5 : 0x56525c;
+        band = px_mix(fill, 0xffffff, 0.22f);
+        low = px_mix(fill, 0, 0.28f);
+        edge = px.light ? px_mix(fill, 0, 0.55f) : px_mix(fill, 0xffffff, 0.55f);
+        lamp_on = px_pixel_corners ? px.screen_bg : px.light ? 0x8a8478 : 0x2a282e;
+        ink = px_ink_on(fill);
+    } else {
+        /* the legend's three tones: tinted fill, stronger border, text in the same colour */
+        tone_of(base, &fill, &edge, &band, &ink);
+        if (kind == PX_BADGE_PRIMARY) {
+            /* same step as the primary button: the top of the fill is softer than the border, and still
+               above the darker bottom tone */
+            edge = px.accent.base;
+            ink = px.light ? px.accent.dark : px.accent.light;
+            band = px_mix(fill, edge, px.light ? 0.28f : 0.46f);
+        } else if (kind == PX_BADGE_DANGER) {
+            edge = px.fav_border; band = px.fav_band; fill = px.fav_body; ink = px.fav_ink;
+        }
+        low = px_mix(fill, 0x000000, 0.35f);
+        lamp_on = px.light ? px_mix(base, 0x000000, 0.15f) : px_mix(base, 0xffffff, 0.55f);
+    }
     memset(&b, 0, sizeof b);
     b.r = 10; b.border_w = 3; b.fill = fill; b.border = edge;
     b.band_top = band; b.band_top_h = (int)(h * 0.2f);
@@ -1073,7 +1397,7 @@ float px_badge_dots(PxCanvas *c, float x, float y, float h, const char *text, in
     /* the lamp: a lit square with a dark rim (off: unlit) */
     px_rect(c, lx - 2, y + (h - lamp) / 2 - 2, lamp + 4, lamp + 4, px_mix(low, 0, 0.35f));
     px_rect(c, lx, y + (h - lamp) / 2, lamp, lamp, lamp_on);
-    if (kind != PX_BADGE_OFF) px_rect(c, lx + 2, y + (h - lamp) / 2 + 2, lamp * 0.35f, lamp * 0.35f, 0xffffff);
+    if (kind != PX_BADGE_NEUTRAL) px_rect(c, lx + 2, y + (h - lamp) / 2 + 2, lamp * 0.35f, lamp * 0.35f, 0xffffff);
     if (dots >= 0)
         px_text_dots(c, PX_MEDIUM, size, lx + lamp + h * 0.3f, y + (h - size * 1.2f) / 2 + 1, text, dots, ink,
                      PX_UPPER | PX_TRACK, PX_LEFT);
@@ -1107,34 +1431,62 @@ float px_face_w(const PxCanvas *c, const char *key, const char *label)
     return 13 + px_keycap_w(c, key) + 9 + px_text_w(c, PX_MEDIUM, g_face_size, label, 0) + 15;
 }
 
-void px_face(PxCanvas *c, float x, float y, int align, const char *key, const char *label, int dis, PxRect *hit)
-{
-    px_face_tone(c, x, y, align, key, label, dis, PX_FACE_PLAIN, hit);
-}
-
-void px_face_tone(PxCanvas *c, float x, float y, int align, const char *key, const char *label, int dis, int tone,
-                  PxRect *hit)
+void px_face(PxCanvas *c, float x, float y, int align, const char *key, const char *label, int dis, PxRect *hit,
+              int variant)
 {
     Box b;
     float w = px_face_w(c, key, label), kx;
-    int danger = tone == PX_FACE_DANGER && !dis;
+    uint32_t ink, fill, border, band;
+    int primary = 0, danger_solid = 0;
     if (align == PX_RIGHT) x -= w;
     else if (align == PX_CENTER) x -= w / 2;
     memset(&b, 0, sizeof b);
-    b.r = 10; b.fill = px.bubble_body; b.border = dis ? px_mix(px.line, px.screen_bg, 0.45f) : px.edge; b.border_w = 3;
-    b.band_top = px.bubble_band; b.band_top_h = 8;
-    b.inset_bot = px.panel_low; b.inset_bot_h = 4; b.inset_bot_a = 255;
-    if (danger) {
-        /* a key that ends something (Disconnect): the design system's "bad" red, dark ink */
+    b.r = 10;
+    if (!dis && variant == PX_FACE_PRIMARY) {
+        tone_of(px.accent.base, &fill, &border, &band, &ink);
+        /* border stays the accent. The top of the fill is softer than that border and still a step above the
+           dark body; the bottom strip, set below, is the least opaque of the three. */
+        border = px.accent.base;
+        if (!px.light) {
+            band = px_mix(fill, px.accent.base, 0.46f);
+            ink = px.accent.light;
+        } else {
+            band = px_mix(fill, px.accent.base, 0.28f);
+            ink = px.accent.dark;
+        }
+        b.fill = fill; b.border = border; b.band_top = band;
+        primary = 1;
+    } else if (!dis && variant == PX_FACE_DANGER && px_pixel_corners) {
+        /* Pixelado's look: a key that ends something (Disconnect) is the design system's "bad" red, solid, dark ink */
         b.fill = px.red; b.border = px_mix(px.red, 0xffffff, 0.45f);
-        b.band_top = px_mix(px.red, 0xffffff, 0.25f); b.inset_bot = px_mix(px.red, 0x000000, 0.35f);
+        b.band_top = px_mix(px.red, 0xffffff, 0.25f);
+        ink = px_ink_on(px.red);
+        danger_solid = 1;
+    } else if (!dis && variant == PX_FACE_DANGER) {
+        /* danger is the alert red: text, border and fill, three tones */
+        b.fill = px.fav_body;
+        b.border = px.fav_border;
+        b.band_top = px.fav_band;
+        ink = px.fav_ink;
+    } else {
+        b.fill = px.bubble_body;
+        b.border = dis ? px_mix(px.line, px.screen_bg, 0.45f) : px.edge;
+        b.band_top = px.bubble_band;
+        ink = dis ? px.dim : px.ink;
+    }
+    b.border_w = 3;
+    b.band_top_h = 8;
+    b.inset_bot = px.panel_low; b.inset_bot_h = 4; b.inset_bot_a = 255;
+    if (primary) {
+        b.inset_bot = px.light ? px_mix(fill, 0xffffff, 0.45f) : px_mix(fill, 0x000000, 0.50f);
+        b.inset_bot_a = px.light ? 80 : 100;
     }
     b.shadow = 0x000000; b.sdx = 3; b.sdy = 3; b.shadow_a = px.light ? 40 : 217;
+    if (danger_solid) b.inset_bot = px_mix(px.red, 0x000000, 0.35f);
     box(c, x, y, w, 40, &b);
     kx = x + 13;
     kx += px_keycap(c, kx, y + 9, key) + 9;
-    px_text(c, PX_MEDIUM, g_face_size, kx, y + 8 + (19 - g_face_size) * 0.5f, label,
-            dis ? px.dim : danger ? px_ink_on(px.red) : px.ink, 0);
+    px_text(c, PX_MEDIUM, g_face_size, kx, y + 8 + (19 - g_face_size) * 0.5f, label, ink, 0);
     if (hit) {
         hit->x = px_u(c, x); hit->y = px_u(c, y);
         hit->w = px_u(c, x + w) - hit->x; hit->h = px_u(c, y + 40) - hit->y;
@@ -1153,30 +1505,77 @@ void px_faces(PxCanvas *c, float y, int n, int left, const PxFace *f, PxRect *hi
     }
     x = 18;
     for (i = 0; i < left && i < n; i++) {
-        px_face(c, x, y, PX_LEFT, f[i].key, f[i].label, f[i].dis, hits ? &hits[i] : NULL);
+        px_face(c, x, y, PX_LEFT, f[i].key, f[i].label, f[i].dis, hits ? &hits[i] : NULL, PX_FACE_NEUTRAL);
         x += px_face_w(c, f[i].key, f[i].label) + 8;
     }
     x = 622;
     for (i = n - 1; i >= left; i--) {
-        px_face(c, x, y, PX_RIGHT, f[i].key, f[i].label, f[i].dis, hits ? &hits[i] : NULL);
+        px_face(c, x, y, PX_RIGHT, f[i].key, f[i].label, f[i].dis, hits ? &hits[i] : NULL, PX_FACE_NEUTRAL);
         x -= px_face_w(c, f[i].key, f[i].label) + 8;
     }
     g_face_size = 19;
 }
 
-void px_rail(PxCanvas *c, float x, float y, float h, int first, int shown, int total)
+void px_rail(PxCanvas *c, float x, float y, float h, int first, int shown, int total, PxRect *track, PxRect *thumb)
 {
-    float th, ty;
-    px_round(c, x, y, 5, h, 2, px.rail_bg, 255);
+    float th, ty, bar = 7;
+    px_round(c, x, y, bar, h, 3, px.rail_bg, 255);
+    if (track) {
+        track->x = px_u(c, x - 10);
+        track->y = px_u(c, y);
+        track->w = px_u(c, x + bar + 12) - track->x;
+        track->h = px_u(c, y + h) - track->y;
+    }
     if (total <= 0) return;
     if (shown > total) shown = total;
     th = h * shown / total;
-    if (th < 34) th = 34;
+    if (th < 48) th = 48;
     if (th > h) th = h;
     ty = total > shown ? y + (h - th) * first / (total - shown) : y;
-    px_round(c, x - 1, ty, 7, th, 2, px.edge, 255);
-    px_round(c, x, ty + 1, 5, th - 2, 2, px.accent.base, 255);
-    px_rect(c, x + 1, ty + 2, 3, 4, px.accent.light);
+    px_round(c, x - 1, ty, bar + 2, th, 3, px.edge, 255);
+    px_round(c, x, ty + 1, bar, th - 2, 2, px.accent.base, 255);
+    px_rect(c, x + 1, ty + 2, bar - 2, 4, px.accent.light);
+    if (thumb) {
+        thumb->x = px_u(c, x - 12);
+        thumb->y = px_u(c, ty - 8);
+        thumb->w = px_u(c, x + bar + 14) - thumb->x;
+        thumb->h = px_u(c, ty + th + 8) - thumb->y;
+    }
+}
+
+void px_hrail(PxCanvas *c, float x, float y, float w, int pos, int total, const char *count, PxRect *track, PxRect *thumb)
+{
+    float tw, tx, cw = 0, track_w = w;
+    if (count && count[0]) {
+        cw = px_text_w(c, PX_MEDIUM, 19, count, 0) + 14;
+        px_text(c, PX_MEDIUM, 19, x + w - cw + 4, y - 2, count, px.muted, 0);
+        track_w = w - cw;
+    }
+    px_round(c, x, y + 2, track_w, 12, 2, px.rail_bg, 255);
+    if (track) {
+        track->x = px_u(c, x);
+        track->y = px_u(c, y - 8);
+        track->w = px_u(c, x + track_w) - track->x;
+        track->h = px_u(c, y + 22) - track->y;
+    }
+    if (total <= 1) {
+        tw = track_w < 48 ? track_w : 48;
+        tx = x;
+    } else {
+        tw = track_w * 12.0f / (float)total;
+        if (tw < 28) tw = 28;
+        if (tw > track_w) tw = track_w;
+        tx = x + (track_w - tw) * (float)pos / (float)(total - 1);
+    }
+    px_round(c, tx - 1, y, tw + 2, 14, 2, px.edge, 255);
+    px_round(c, tx, y + 1, tw, 12, 2, px.accent.base, 255);
+    px_rect(c, tx + 2, y + 2, tw * 0.35f, 3, px.accent.light);
+    if (thumb) {
+        thumb->x = px_u(c, tx - 5);
+        thumb->y = px_u(c, y - 6);
+        thumb->w = px_u(c, tx + tw + 5) - thumb->x;
+        thumb->h = px_u(c, y + 20) - thumb->y;
+    }
 }
 
 void px_label(PxCanvas *c, float x, float y, const char *s, uint32_t rgb)

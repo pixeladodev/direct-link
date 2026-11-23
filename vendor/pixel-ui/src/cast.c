@@ -5,6 +5,8 @@
 static const struct { const char *const *map; const CastInk *ink; } CAST[CAST_COUNT] = {
     { cast_nilo_map, cast_nilo_ink },
     { cast_lumi_map, cast_lumi_ink },
+    { cast_tavo_map, cast_tavo_ink },
+    { cast_kira_map, cast_kira_ink },
     { cast_pixo_map, cast_pixo_ink },
     { cast_pixo_about_map, cast_pixo_about_ink },
 };
@@ -12,6 +14,9 @@ static const struct { const char *const *map; const CastInk *ink; } CAST[CAST_CO
 /* per beat: up (1: one pixel higher), blink (1: eyes closed) */
 static const unsigned char BEAT_UP[CAST_BEATS] = { 0, 0, 1, 1, 0, 0, 0, 0 };
 static const unsigned char BEAT_BLINK[CAST_BEATS] = { 0, 0, 0, 0, 0, 1, 0, 0 };
+
+/* each character's offset in the idle, so a group does not move in step (Nilo, Lumi, Tavo, Kira, Pixo, Pixo-about) */
+static const unsigned char PHASE[CAST_COUNT] = { 0, 2, 4, 6, 4, 6 };
 
 static uint32_t ink_of(const CastInk *ink, char ch)
 {
@@ -22,7 +27,8 @@ static uint32_t ink_of(const CastInk *ink, char ch)
 
 int cast_pose(int who, int beat)
 {
-    int b = ((beat + who * 2) % CAST_BEATS + CAST_BEATS) % CAST_BEATS;
+    if (who < 0 || who >= CAST_COUNT) return 0;
+    int b = ((beat + PHASE[who]) % CAST_BEATS + CAST_BEATS) % CAST_BEATS;
     return BEAT_UP[b] | BEAT_BLINK[b] << 1;
 }
 

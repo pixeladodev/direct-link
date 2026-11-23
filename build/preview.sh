@@ -6,6 +6,8 @@
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 [ -f "$ROOT/preview.env" ] && set -a && . "$ROOT/preview.env" && set +a
+# the pixel-ui library: the vendored copy, or a live working copy (PIXEL_UI_DIR=../pixel-ui)
+UI=$(CDPATH= cd -- "${PIXEL_UI_DIR:-$ROOT/vendor/pixel-ui}" && pwd) || { echo "no pixel-ui at ${PIXEL_UI_DIR:-vendor/pixel-ui}" >&2; exit 1; }
 OUT=${1:-$ROOT/dist/preview}
 CC=${HOST_CC:-cc}
 if [ -z "${PIXEL_UI_FONTS:-}" ]; then
@@ -23,6 +25,7 @@ export PIXEL_UI_THEMES_IMAGE="${PIXEL_UI_THEMES_IMAGE:-/usr/share/banana/themes}
 export BANANA_THEMES="${BANANA_THEMES:-$ROOT/dist/no-card-themes}"
 export PREVIEW_STAMP="${PREVIEW_STAMP:-$(TZ=UTC date +%Y%m%d-%H%M)}"
 mkdir -p "$OUT" "$ROOT/dist"
-(cd "$ROOT" && $CC -O2 -Wall -Wextra -Icore -Icore/third_party -o "$ROOT/dist/preview-ui" \
-    frontends/preview/preview.c core/view.c core/cast.c core/pixel.c frontends/linux-kms/updater.c core/pixel_png.c core/stb_impl.c -lm)
+(cd "$ROOT" && $CC -O2 -Wall -Wextra -Icore -I"$UI/include" -I"$UI/third_party" -o "$ROOT/dist/preview-ui" \
+    frontends/preview/preview.c core/view.c "$UI/src/cast.c" "$UI/src/pixel.c" "$UI/linux-kms/updater.c" \
+    "$UI/src/pixel_png.c" "$UI/src/stb_impl.c" -lm)
 "$ROOT/dist/preview-ui" "$OUT"

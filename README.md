@@ -84,10 +84,14 @@ Optional file `/data/banana/direct-link.conf` (read only): `CHANNEL` (`auto` by 
 ## Built with
 
 Source available under the PolyForm Strict License 1.0.0, with permission to redistribute the unmodified official
-releases; see `LICENSE` and `NOTICE`. The UI is C on its own pixel renderer (`core/`), the handheld program is `frontends/linux-kms/`,
-and what BananaOS needs is in `platforms/bananaos/` (`app/wifi-link` drives the radio). How the screens behave:
-`docs/UX.md`. The characters (Nilo, Lumi and Pixo here) are pixel maps in `assets/characters/characters.py`, which
-writes `core/cast_sprites.h`. Screenshots: `build/preview.sh`. Package: `build/package.sh`; checks: `build/selftest.sh`.
+releases; see `LICENSE` and `NOTICE`. The screens are C in `core/view.c` on Pixelado's shared pixel renderer,
+[pixel-ui](../pixel-ui), vendored in `vendor/pixel-ui/` (its `VERSION` says which commit), so this repo builds on its
+own; to work on both at once, run any build script with `PIXEL_UI_DIR=../pixel-ui` (for example
+`PIXEL_UI_DIR=../pixel-ui build/preview.sh`) and sync the copy with `pixel-ui/tools/vendor.sh .` when it is committed.
+The handheld program is `frontends/linux-kms/`, and what BananaOS needs is in `platforms/bananaos/` (`app/wifi-link`
+drives the radio). How the screens behave: `docs/UX.md`. The characters (Nilo, Lumi and Pixo here) are pixel maps in
+pixel-ui's `characters/characters.py`. Screenshots: `build/preview.sh`. Package: `build/package.sh`; checks:
+`build/selftest.sh`.
 
 ## Credits
 

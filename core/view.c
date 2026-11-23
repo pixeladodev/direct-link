@@ -1,4 +1,4 @@
-/* Direct Link: the two panels in Pixelado's design system (pixel.c, px_pal_pixelado).
+/* Direct Link: the two panels in Pixelado's design system (pixel-ui, px_pal_pixelado).
    Top: the link's state, a drawing of the two consoles, which consoles are on it, and what to do next.
    Bottom: two big choices, Host and Join, side by side (docs/UX.md: how picking and confirming work); while a link
    starts, the one picked with Cancel; once up, the link's card with Disconnect. Only Wi-Fi links today: the mode is
@@ -339,8 +339,8 @@ void view_top(PxCanvas *c, const Model *m)
     /* the state, big: green connected, the accent on its way (or waiting for the other console), grey off */
     px_label(c, 44, 84, T("Status"), px.muted);
     d = status_word(m, buf, sizeof buf);
-    kind = m->job != JOB_NONE || m->canceling || m->lost || (m->linked && !view_connected(m)) ? PX_BADGE_BUSY
-           : view_connected(m) ? PX_BADGE_ON : PX_BADGE_OFF;
+    kind = m->job != JOB_NONE || m->canceling || m->lost || (m->linked && !view_connected(m)) ? PX_BADGE_PRIMARY
+           : view_connected(m) ? PX_BADGE_SUCCESS : PX_BADGE_NEUTRAL;
     px_badge_dots(c, 42, 104, bh, buf, d, kind);
     if (m->linked)
         px_text_fit(c, PX_MEDIUM, 19, 598, 118, !strcmp(m->role, "join") ? T("You are a guest") : T("You are the host"),
@@ -541,7 +541,7 @@ static void view_about(PxCanvas *c, const Model *m)
     px_text_wrap(c, PX_REGULAR, 16, 40, y,
                  T("An independent app, not part of BananaOS. Built and tested on the RG DS and the RG DS Plus. Source available (PolyForm Strict)."),
                  px.muted, 560, 3, 23);
-    px_face(c, 18, 422, PX_LEFT, "B", T("Back"), 0, &r);
+    px_face(c, 18, 422, PX_LEFT, "B", T("Back"), 0, &r, PX_FACE_NEUTRAL);
     add_face_hit(r, HIT_BACK);
 }
 
@@ -564,20 +564,20 @@ void view_bottom(PxCanvas *c, const Model *m)
         snprintf(count, sizeof count, "%02d/%02d", m->cursor + 1, rows);
         px_text(c, PX_MEDIUM, 19, 602 - px_text_w(c, PX_MEDIUM, 19, count, 0), 30, count, px.muted, 0);
         for (i = 0; i < SET_COUNT; i++) set_row(c, m, i, 84 + i * 66, i == SET_ABOUT ? T("About") : T("Updates"));
-        px_rail(c, 615, 84, SET_COUNT * 66 - 12, m->cursor, 1, SET_COUNT);
+        px_rail(c, 615, 84, SET_COUNT * 66 - 12, m->cursor, 1, SET_COUNT, NULL, NULL);
     }
 
     if (m->view == V_SETTINGS) {
         PxRect r;
         float y = 422, bw;
         int inst = upd_installing(&m->upd);
-        px_face(c, 18, y, PX_LEFT, "B", T("Back"), 0, &r);
+        px_face(c, 18, y, PX_LEFT, "B", T("Back"), 0, &r, PX_FACE_NEUTRAL);
         add_face_hit(r, HIT_BACK);
         bw = px_face_w(c, "B", T("Back"));
-        px_face(c, 18 + bw + 8, y, PX_LEFT, "Y", T("Uninstall"), busy || inst || m->linked, &r);
+        px_face(c, 18 + bw + 8, y, PX_LEFT, "Y", T("Uninstall"), busy || inst || m->linked, &r, PX_FACE_NEUTRAL);
         add_face_hit(r, HIT_Y);
         px_face(c, 622, y, PX_RIGHT, "A", m->cursor == SET_UPDATES ? upd_action(&m->upd) : T("Open"),
-                  inst || (m->cursor == SET_UPDATES && (upd_running(&m->upd) || m->linked)), &r);
+                  inst || (m->cursor == SET_UPDATES && (upd_running(&m->upd) || m->linked)), &r, PX_FACE_NEUTRAL);
         add_face_hit(r, HIT_OK);
         return;
     }
@@ -593,20 +593,20 @@ void view_bottom(PxCanvas *c, const Model *m)
         }
         if (starting && !m->canceling) {
             /* B cancels the start (or the join): the link comes down and home Wi-Fi comes back */
-            px_face(c, 18, y, PX_LEFT, "B", T("Cancel"), 0, &r);
+            px_face(c, 18, y, PX_LEFT, "B", T("Cancel"), 0, &r, PX_FACE_NEUTRAL);
             add_face_hit(r, HIT_CANCEL);
             return;
         }
-        px_face(c, 18, y, PX_LEFT, "B", T("Exit"), busy || inst || m->canceling, &r);
+        px_face(c, 18, y, PX_LEFT, "B", T("Exit"), busy || inst || m->canceling, &r, PX_FACE_NEUTRAL);
         add_face_hit(r, HIT_BACK);
         bw = px_face_w(c, "B", T("Exit"));
-        px_face(c, 18 + bw + 8, y, PX_LEFT, "START", T("Settings"), busy || m->canceling || m->linked, &r);
+        px_face(c, 18 + bw + 8, y, PX_LEFT, "START", T("Settings"), busy || m->canceling || m->linked, &r, PX_FACE_NEUTRAL);
         add_face_hit(r, HIT_MENU);
         if (m->linked) {
-            px_face_tone(c, 622, y, PX_RIGHT, "X", T("Disconnect"), busy || inst || m->canceling, PX_FACE_DANGER, &r);
+            px_face(c, 622, y, PX_RIGHT, "X", T("Disconnect"), busy || inst || m->canceling, &r, PX_FACE_DANGER);
             add_face_hit(r, HIT_X);
         } else {
-            px_face(c, 622, y, PX_RIGHT, "A", T("Confirm"), !view_can_connect(m) || inst || m->canceling, &r);
+            px_face(c, 622, y, PX_RIGHT, "A", T("Confirm"), !view_can_connect(m) || inst || m->canceling, &r, PX_FACE_NEUTRAL);
             add_face_hit(r, HIT_OK);
         }
         return;
@@ -627,22 +627,22 @@ void view_bottom(PxCanvas *c, const Model *m)
                  done && m->upd.msg[0] ? " " : "", done ? m->upd.msg : "");
         dialog(c, title, sub, NULL);
         if (!done) {
-            px_face(c, 18, 422, PX_LEFT, "B", T("Cancel"), 0, &r);
+            px_face(c, 18, 422, PX_LEFT, "B", T("Cancel"), 0, &r, PX_FACE_NEUTRAL);
             add_face_hit(r, HIT_BACK);
         }
-        px_face(c, 622, 422, PX_RIGHT, "A", done ? T("Restart") : T("Update"), 0, &r);
+        px_face(c, 622, 422, PX_RIGHT, "A", done ? T("Restart") : T("Update"), 0, &r, PX_FACE_NEUTRAL);
         add_face_hit(r, HIT_OK);
     } else if (m->view == V_DISC) {
         dialog(c, T("Disconnect?"), !strcmp(m->home, "on") ? T("Home Wi-Fi comes back.") : "", NULL);
-        px_face(c, 18, 422, PX_LEFT, "B", T("Cancel"), 0, &r);
+        px_face(c, 18, 422, PX_LEFT, "B", T("Cancel"), 0, &r, PX_FACE_NEUTRAL);
         add_face_hit(r, HIT_BACK);
-        px_face_tone(c, 622, 422, PX_RIGHT, "A", T("Disconnect"), 0, PX_FACE_DANGER, &r);
+        px_face(c, 622, 422, PX_RIGHT, "A", T("Disconnect"), 0, &r, PX_FACE_DANGER);
         add_face_hit(r, HIT_OK);
     } else if (m->view == V_UNINSTALL) {
         dialog(c, T("Delete this app?"), m->err[0] ? m->err : T("This deletes Direct Link."), NULL);
-        px_face(c, 18, 422, PX_LEFT, "B", T("Cancel"), 0, &r);
+        px_face(c, 18, 422, PX_LEFT, "B", T("Cancel"), 0, &r, PX_FACE_NEUTRAL);
         add_face_hit(r, HIT_BACK);
-        px_face(c, 622, 422, PX_RIGHT, "A", T("Uninstall"), 0, &r);
+        px_face(c, 622, 422, PX_RIGHT, "A", T("Uninstall"), 0, &r, PX_FACE_NEUTRAL);
         add_face_hit(r, HIT_OK);
     }
 }
