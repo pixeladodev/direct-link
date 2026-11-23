@@ -7,12 +7,12 @@ trap 'rm -rf "$T"' EXIT
 fail=0
 bad() { echo "FAIL $1"; fail=1; }
 
-# the vendored pixel-ui the build compiles from
-[ -s "$ROOT/vendor/pixel-ui/VERSION" ] || bad "vendor/pixel-ui/VERSION (run pixel-ui/tools/vendor.sh)"
+# the vendored pixelado-ui the build compiles from
+[ -s "$ROOT/vendor/pixelado-ui/VERSION" ] || bad "vendor/pixelado-ui/VERSION (run pixelado-ui/tools/vendor.sh)"
 for f in include/pixel.h src/pixel.c src/cast.c linux-kms/updater.c third_party/stb_truetype.h; do
-    [ -f "$ROOT/vendor/pixel-ui/$f" ] || bad "vendor/pixel-ui/$f"
+    [ -f "$ROOT/vendor/pixelado-ui/$f" ] || bad "vendor/pixelado-ui/$f"
 done
-grep -q -- '-dirty' "$ROOT/vendor/pixel-ui/VERSION" && echo "selftest: vendor/pixel-ui is from uncommitted pixel-ui work"
+grep -q -- '-dirty' "$ROOT/vendor/pixelado-ui/VERSION" && echo "selftest: vendor/pixelado-ui is from uncommitted pixelado-ui work"
 
 for s in wifi-link wifi-guard.sh host.sh join.sh down.sh status.sh tile.sh uninstall.sh; do
     sh -n "$ROOT/platforms/bananaos/app/$s" || bad "syntax $s"

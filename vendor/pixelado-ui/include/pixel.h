@@ -8,7 +8,7 @@
 
    The palettes, the accent table and the shape recipes are ported from JorreFog/BananaLinux (MIT, Copyright (c)
    2026 JorreFog and the Banana contributors): ui/src/settings_pal.cpp, ui/rnds/RndsUI.cpp and
-   store/apps/activity/DESIGN.md. This is Pixelado's shared pixel UI library (pixel-ui): apps vendor it. */
+   store/apps/activity/DESIGN.md. This is Pixelado's shared pixel UI library (pixelado-ui): apps vendor it. */
 #ifndef PIXEL_H
 #define PIXEL_H
 

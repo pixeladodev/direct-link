@@ -4,7 +4,7 @@
 #   ./dev/deploy.sh                 # consoles from dev/consoles.local
 #   ./dev/deploy.sh -V 0.1.2-dev    # the version the installed app says (default: the manifest's + -dev,
 #                                   # so the updater still offers the next release)
-# PIXEL_UI_DIR=../pixel-ui ./dev/deploy.sh   builds with the live pixel-ui working copy instead of vendor/pixel-ui.
+# PIXELADO_UI_DIR=../pixelado-ui ./dev/deploy.sh   builds with the live pixelado-ui working copy instead of vendor/pixelado-ui.
 # A link that is up keeps running the old wifi-link until it comes down: Disconnect first, then connect again.
 set -euo pipefail
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)

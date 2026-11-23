@@ -1,4 +1,4 @@
-/* Direct Link: the two panels in Pixelado's design system (pixel-ui, px_pal_pixelado).
+/* Direct Link: the two panels in Pixelado's design system (pixelado-ui, px_pal_pixelado).
    Top: the link's state, a drawing of the two consoles, which consoles are on it, and what to do next.
    Bottom: two big choices, Host and Join, side by side (docs/UX.md: how picking and confirming work); while a link
    starts, the one picked with Cancel; once up, the link's card with Disconnect. Only Wi-Fi links today: the mode is
