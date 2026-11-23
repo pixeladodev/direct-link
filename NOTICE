@@ -1,0 +1,44 @@
+Direct Link
+Required Notice: Copyright (c) 2026 Pixelado Dev (https://github.com/pixeladodev)
+
+Direct Link is licensed under the PolyForm Strict License 1.0.0 (LICENSE), with the
+additional permission and the trademark terms below. It is not open source.
+
+Additional permission: redistribution of official releases
+  In addition to the PolyForm Strict License, Pixelado Dev gives you permission to
+  redistribute the official release packages of Direct Link, as published by Pixelado
+  Dev on https://github.com/pixeladodev, unmodified and complete, including through app
+  stores and download mirrors, free of charge or as part of a free catalog, provided
+  that this NOTICE and LICENSE stay with them. This permission does not cover modified
+  packages, packages built from the source, or selling the software.
+
+Trademarks
+  "Pixelado", the Pixelado logos and the characters (Nilo, Lumi, Tavo, Kira and Pixo)
+  are Pixelado Dev's. Neither the license nor any permission above grants any right to
+  use them, except to name and show the unmodified official releases you redistribute.
+
+Third-party parts, under their own licences
+  platforms/bananaos/app/wifi-link is adapted from BananaLinux's wifi-link (MIT).
+  core/pixel.c and core/pixel.h follow the look of BananaOS's own menus and apps from
+  BananaLinux (MIT): the palette and accents of settings_pal.cpp, the row and key-hint
+  layout of RndsUI.cpp, and the box painter of the Activity app (store/apps/activity).
+  Copyright (c) 2026 JorreFog and the Banana contributors. MIT License:
+    Permission is hereby granted, free of charge, to any person obtaining a copy of
+    this software and associated documentation files (the "Software"), to deal in the
+    Software without restriction, including without limitation the rights to use,
+    copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+    Software, and to permit persons to whom the Software is furnished to do so,
+    subject to the following conditions: The above copyright notice and this
+    permission notice shall be included in all copies or substantial portions of the
+    Software. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+    OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+    WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+    CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+
+  core/third_party/stb_truetype.h is public domain (Sean Barrett).
+  The typeface is Pixelify Sans (SIL Open Font License).
+
+The app draws with libdrm. Its colours are BananaOS's palette.

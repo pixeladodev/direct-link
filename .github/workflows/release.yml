@@ -1,0 +1,40 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Match tag to app_version
+        run: bash build/validate-release-tag.sh "$GITHUB_REF_NAME"
+      - name: Require quality release notes
+        run: bash build/check-release-notes.sh
+      - name: Compile the app and pack the zip
+        run: docker run --rm --platform linux/amd64 -v "$PWD:/src" -w /src debian:trixie-slim bash build/release-build.sh
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          ver=$(sed -n 's/^app_version=//p' manifest | head -n 1 | tr -d '\r')
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists on GitHub." >&2
+            exit 1
+          fi
+          notes=$(mktemp)
+          bash build/assemble-release-notes.sh > "$notes"
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/direct-link-${ver}.zip" \
+            dist/Install-Direct-Link.sh \
+            dist/SHA256SUMS \
+            --title "Direct Link ${ver}" \
+            --notes-file "$notes"

@@ -1,0 +1,4 @@
+{
+  "launch": "tile.sh",
+  "pre_remove": "down.sh"
+}

@@ -1,0 +1,5 @@
+app_version=0.1.0
+bananaos=0.5.3.6
+update_repo=pixeladodev/direct-link
+update_asset=direct-link-{version}-bananaos-{bananaos}.zip direct-link-{version}.zip
+update_root=direct-link

@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# build
+dist/
+frontends/linux-kms/direct-link
+
+# Python
+__pycache__/
+*.py[cod]
+
+# this machine only
+dev/consoles.local
+preview.env

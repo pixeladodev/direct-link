@@ -1,0 +1,602 @@
+#!/bin/sh
+# Based on BananaLinux's wifi-link (MIT, Copyright 2026 JorreFog and the Banana contributors).
+# Direct Link: handhelds on a radio cell of their own (IBSS, "ad hoc"), without a router.
+# The Direct Link app runs this. It also works by hand over SSH, but SSH is lost while the link is up
+# (the console leaves the home network). The app does not pass --owner: the link stays up after the
+# app closes and across games, until "wifi-link down".
+#   wifi-link up host|join [--owner PID] [--channel N | --freq MHZ] [--max SECONDS]
+#   wifi-link down [--sleep] [--nowait]
+#   wifi-link status
+# up: BananaOS's Wi-Fi goes down (wifi down), its lock (/run/banana/wifi.lock) is held while the link is up, so
+# Settings' up/down/scan wait instead of fighting it, and an own wpa_supplicant joins (or starts) the open IBSS
+# "bananalink" on 2.4 GHz with a fixed BSSID (all of them in one cell from the start), on the quietest of channels
+# 1, 6 and 11 (see pick_channel; a player looks for the cell on the three). No DHCP: static
+# addresses in 10.42.0.0/16. The host is 10.42.0.1 and fails if that address is taken. A player takes the
+# first free address in 10.42.0.2-9, each checked with an ARP probe (arping -D). A device
+# default route (no gateway) lets 255.255.255.255 broadcasts out (the games' discovery: Pixelado Party and others, from an INADDR_ANY socket).
+# up again with the other role only changes the address. It prints "ok state=up role=... ip=... freq=..." or
+# "error <why>" (exit 1), within ~50 s (a player looks for the host's cell up to 15 s first).
+# A supervisor (its own session, so it outlives the caller) holds the link and puts the home Wi-Fi back
+# (wifi up, only if it was up before) when: down is asked; the owner (--owner, the app's pid) is gone (a crash);
+# the owner is stopped for 1 s (bananad's SIGSTOP before a sleep: then the link only comes down and sleep.d's
+# 10-wifi brings the Wi-Fi back after the wake); its wpa_supplicant dies; --max seconds have passed (by hand: a
+# safety net); or it is killed (its trap). A watchdog of its own does the same if the supervisor dies without it.
+# A reboot undoes everything too (nothing is kept but the log).
+# Security: this wpa_supplicant 2.11 is built without CONFIG_IBSS_RSN ("IBSS RSN not supported in the build"), so
+# the cell is open (unencrypted, anyone in reach can join it). Settings in /data/banana/direct-link.conf (KEY=value
+# lines, read, never run): CHANNEL (auto, the default, or 1-11 for a fixed one), FREQ (MHz, wins over CHANNEL),
+# SSID, BSSID, MAX (seconds, 0
+# means until Disconnect), LOST_MAX (seconds a player goes on looking for a host it had and lost before it closes
+# the link and the home Wi-Fi comes back; 60, 0 means for good); BANANA_LINK_<KEY> in the
+# environment wins over the file; the options win over both.
+WIFI=${BANANA_LINK_WIFI:-/usr/libexec/banana/wifi}
+D=${BANANA_LINK_DIR:-${BANANA_LINK_RUN:-/run/banana}/direct-link}
+LOG=${BANANA_LINK_LOG:-/data/banana/logs/direct-link.log}
+CONF=${BANANA_LINK_CONF:-/data/banana/direct-link.conf}
+IF=wlan0
+RUN=${BANANA_LINK_RUN:-/run/banana}      # (these two only for the tests: BananaOS's own places)
+SYS=${BANANA_LINK_SYS:-/sys/class/net}
+WIFILOCK=$RUN/wifi.lock
+SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
+CTRL=$D/ctrl
+W="wpa_cli -p $CTRL -i $IF"
+
+log() { echo "$(date '+%F %T') [$$] $*" >> "$LOG" 2>/dev/null; }
+say() { echo "$*"; log "$*"; }
+st_get() { sed -n "s/^$1=//p" "$D/state" 2>/dev/null; }
+st_set() {   # st_set key=value...: the state file rewritten whole (read by status and the up/down waiting)
+    { for kv in "$@"; do echo "$kv"; done
+      for k in state role ip freq ssid owner since msg phase home_wifi peers peer_ips; do
+          case " $* " in *" $k="*) ;; *) v=$(st_get $k); [ -n "$v" ] && echo "$k=$v" ;; esac
+      done; } > "$D/state.tmp"
+    mv -f "$D/state.tmp" "$D/state"
+}
+SETTINGS=${BANANA_SETTINGS:-/data/banana/settings.conf}
+is_wifi_key() {
+    s=$(printf '%s' "$1" | sed 's/^[[:space:]]*//;s/[[:space:]]*=[[:space:]]*/=/')
+    case $s in wifi=*) return 0 ;; esac
+    return 1
+}
+save_wifi_setting() {   # the wifi= line as it is now, so Disconnect can put it back
+    if [ ! -f "$SETTINGS" ]; then printf 'NONE\n' > "$D/wifi-setting"; return 0; fi
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=$(printf '%s' "$line" | tr -d '\r')
+        if is_wifi_key "$line"; then printf '%s\n' "$line" > "$D/wifi-setting"; return 0; fi
+    done < "$SETTINGS"
+    printf 'NONE\n' > "$D/wifi-setting"
+}
+rewrite_settings() {   # rewrite_settings off|restore. A failure is logged; the link still comes up.
+    saved=
+    if [ "$1" = restore ]; then
+        [ -f "$D/wifi-setting" ] || return 0
+        saved=$(head -n 1 "$D/wifi-setting" | tr -d '\r')
+    fi
+    [ -f "$SETTINGS" ] || { log "settings: no $SETTINGS"; return 0; }
+    tmp=$SETTINGS.direct-link.tmp
+    : > "$tmp" || { log "settings: cannot write beside $SETTINGS"; return 0; }
+    found=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        line=$(printf '%s' "$line" | tr -d '\r')
+        if is_wifi_key "$line"; then
+            found=1
+            if [ "$1" = off ]; then printf 'wifi=off\n' >> "$tmp"
+            elif [ "$saved" != NONE ] && [ -n "$saved" ]; then printf '%s\n' "$saved" >> "$tmp"
+            fi
+        else
+            printf '%s\n' "$line" >> "$tmp"
+        fi
+    done < "$SETTINGS"
+    if [ "$found" = 0 ]; then
+        if [ "$1" = off ]; then printf 'wifi=off\n' >> "$tmp"
+        elif [ "$saved" != NONE ] && [ -n "$saved" ]; then printf '%s\n' "$saved" >> "$tmp"
+        fi
+    fi
+    if cp "$tmp" "$SETTINGS" 2>>"$LOG"; then rm -f "$tmp"
+    else log "settings: could not update $SETTINGS"; rm -f "$tmp"; fi
+    [ "$1" = restore ] && rm -f "$D/wifi-setting"
+    return 0
+}
+mount_guard() {
+    guard=$(CDPATH= cd -- "$(dirname "$SELF")" && pwd)/wifi-guard.sh
+    [ -f "$guard" ] || { log "guard: no wifi-guard.sh (the link still comes up)"; return 0; }
+    cp "$WIFI" "$D/wifi.orig" 2>>"$LOG" || { log "guard: could not copy $WIFI"; return 0; }
+    chmod 755 "$D/wifi.orig" 2>/dev/null || true
+    if mount --bind "$guard" "$WIFI" 2>>"$LOG"; then
+        printf '%s\n' "$WIFI" > "$D/wifi.mount"
+        log "guard: mounted over $WIFI"
+    else
+        log "guard: mount failed (the link still comes up)"
+        rm -f "$D/wifi.orig"
+    fi
+}
+unmount_guard() {
+    [ -f "$D/wifi.mount" ] || return 0
+    target=$(head -n 1 "$D/wifi.mount" | tr -d '\r')
+    umount "$target" 2>>"$LOG" || umount -l "$target" 2>>"$LOG" || true
+    if mount 2>/dev/null | grep -q " on $target "; then
+        log "guard: still mounted on $target"
+        return 0
+    fi
+    rm -f "$D/wifi.mount" "$D/wifi.orig"
+}
+# lock_wait FD SECONDS: flock with a timeout (BusyBox's flock has no -w: -n, tried every 0.2 s)
+lock_wait() {
+    _n=0
+    while ! flock -n "$1" 2>/dev/null; do
+        [ $_n -ge $(($2 * 5)) ] && return 1
+        sleep 0.2; _n=$((_n + 1))
+    done
+}
+alive() { [ -n "$1" ] && kill -0 "$1" 2>/dev/null; }
+super_pid() { p=$(cat "$D/super.pid" 2>/dev/null); alive "$p" && echo "$p"; }
+
+# the settings: the file, then the environment, then the options
+conf() {
+    SSID=bananalink BSSID=02:42:4e:41:00:01 CHANNEL=auto FREQ= MAX=0 LOST_MAX=60
+    if [ -f "$CONF" ]; then
+        while IFS='=' read -r k v || [ -n "$k" ]; do
+            k=$(echo "$k" | tr -d ' \t\r'); v=$(echo "$v" | tr -d ' \t\r"'"'")
+            case $k in SSID) SSID=$v ;; BSSID) BSSID=$v ;; CHANNEL) CHANNEL=$v ;; FREQ) FREQ=$v ;; MAX) MAX=$v ;;
+                LOST_MAX) LOST_MAX=$v ;; esac
+        done < "$CONF"
+    fi
+    [ -n "$BANANA_LINK_SSID" ] && SSID=$BANANA_LINK_SSID
+    [ -n "$BANANA_LINK_BSSID" ] && BSSID=$BANANA_LINK_BSSID
+    [ -n "$BANANA_LINK_CHANNEL" ] && CHANNEL=$BANANA_LINK_CHANNEL
+    [ -n "$BANANA_LINK_FREQ" ] && FREQ=$BANANA_LINK_FREQ
+    [ -n "$BANANA_LINK_MAX" ] && MAX=$BANANA_LINK_MAX
+    [ -n "$BANANA_LINK_LOST_MAX" ] && LOST_MAX=$BANANA_LINK_LOST_MAX
+    case $LOST_MAX in ''|*[!0-9]*) LOST_MAX=60 ;; esac
+    # (into wpa_supplicant's file: letters, digits, . _ - only; a BSSID as six hex pairs, else the defaults)
+    SSID=$(printf '%s' "$SSID" | tr -cd 'A-Za-z0-9._-' | cut -c1-32); [ -n "$SSID" ] || SSID=bananalink
+    case $BSSID in [0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]:[0-9a-fA-F][0-9a-fA-F]) ;;
+    *) BSSID=02:42:4e:41:00:01 ;; esac
+    return 0
+}
+# 2.4 GHz channel -> MHz; the world regulatory domain (no regulatory.db on BananaOS) lets an IBSS start on 1-11
+chan_freq() {
+    case $1 in
+    [1-9]|1[01]) echo $((2407 + 5 * $1)) ;;
+    *) return 1 ;;
+    esac
+}
+check_freq() {   # FREQ from CHANNEL if not set (auto: chosen when the cell starts); else why not in WHY
+    WHY=
+    [ -z "$FREQ" ] && [ "$CHANNEL" = auto ] && { FREQ=auto; return 0; }
+    [ "$FREQ" = auto ] && return 0
+    if [ -z "$FREQ" ]; then FREQ=$(chan_freq "$CHANNEL") || { WHY="channel $CHANNEL: use auto or 1-11"; return 1; }; fi
+    case $FREQ in *[!0-9]*|'') WHY="frequency $FREQ: not a number of MHz"; return 1 ;; esac
+    case $FREQ in 24[0-9][0-9]) ;; *) log "frequency $FREQ MHz: outside 2.4 GHz (5 GHz is no-IR here: it may not start)" ;; esac
+    return 0
+}
+
+# ---- addresses -------------------------------------------------------------------------------------------
+# free: nobody answers an ARP probe for it (DAD, from 0.0.0.0). No arping: taken as free
+free_ip() {
+    command -v arping >/dev/null 2>&1 || return 0
+    arping -D -q -I $IF -c 2 -w 2 "$1" >/dev/null 2>&1
+}
+pick_ip() {   # host is 10.42.0.1; a player is the first free address in 10.42.0.2-9
+    if [ "$1" = host ]; then
+        free_ip 10.42.0.1 && { echo 10.42.0.1; return 0; }
+        log "10.42.0.1 is taken (another host on the link)"
+        return 1
+    fi
+    n=2
+    while [ $n -le 9 ]; do
+        ip=10.42.0.$n
+        free_ip "$ip" && { echo "$ip"; return 0; }
+        log "$ip is taken: the next one"
+        n=$((n + 1))
+    done
+    return 1
+}
+set_ip() {
+    ip addr flush dev $IF 2>/dev/null
+    ip addr add "$1/16" brd 10.42.255.255 dev $IF || return 1
+    # (no default route: sendto 255.255.255.255 from an INADDR_ANY socket is ENETUNREACH)
+    ip route replace default dev $IF 2>>"$LOG" || ip route add default dev $IF 2>>"$LOG"
+    return 0
+}
+# The cell: mac80211's own IBSS join does 2 short scans and, if they miss the cell (two consoles busy with a game:
+# the 2026-10-29 test), starts one of its own with the same fixed BSSID, which it never merges again and which may
+# not hear the other (the player "looking for hosts" for good). So the network starts disabled and the cell is
+# looked for here first, for longer: our own scans until a beacon of the BSSID is fresh (age <= 2 s: someone else
+# sends it; our own entry left from before only ages), then joined (mac80211 then adopts it, "Selected IBSS BSSID").
+# A player looks for up to 15 s (else it starts the cell: the host may come later), a host 3 s (a player already
+# there). And a player checks every 10 s that the host answers (ARP, 10.42.0.1); while it doesn't, it leaves the
+# cell, looks for a fresh beacon (35 s at most) and joins again.
+# The channel (CHANNEL=auto, the default): 2.4 GHz channels 1, 6 and 11 (the ones that don't overlap). The cell is
+# looked for on the three; a console that starts it scans first and takes the one the networks around use least
+# (each network heard counts on the channels it overlaps, more the stronger it is; a tie keeps 1, then 6). In a car
+# with nobody around that is channel 1, as before; in a flat among many routers on 1, another one. (5 GHz: the world
+# regulatory domain, without regulatory.db, marks it no-IR, so an IBSS may not start there.)
+# The channel is fixed (fixed_freq=1): mac80211 joins the BSSID only on the frequency asked. Without it, it took any
+# entry of the BSSID it still had, its own old cell on another channel included (2026-11-23: a player that had started
+# a cell on 11 "joined" the host on 1 eight times and stayed on 11, never hearing it); the cell is looked for on the
+# three channels here anyway.
+AUTO_FREQS=2412,2437,2462
+CHOSEN=''
+scan_freqs() { if [ "$AUTO" = 1 ]; then echo $AUTO_FREQS; else echo "$FREQ"; fi; }
+use_freq() {   # use_freq MHZ: the network starts or joins there
+    [ "$1" = "$FREQ" ] && return 0
+    FREQ=$1; $W set_network 0 frequency "$FREQ" >/dev/null 2>&1
+    [ -n "$REPORT" ] && st_set freq="$FREQ"
+    return 0
+}
+pick_channel() {   # the quietest of 1, 6, 11 (logged with its score), into use_freq
+    _i=0; while [ $_i -lt 4 ] && [ "$($W scan 2>/dev/null)" != OK ]; do sleep 1; _i=$((_i + 1)); done   # (FAIL-BUSY)
+    sleep 4
+    r=$($W scan_results 2>/dev/null | awk -F'\t' -v me="$BSSID" '
+        NR > 1 && $2 >= 2412 && $2 <= 2484 && tolower($1) != tolower(me) {
+            ch = ($2 == 2484) ? 14 : ($2 - 2407) / 5; w = $3 + 100; if (w < 1) w = 1; n++
+            for (i = 1; i <= 3; i++) { c = (i == 1) ? 1 : (i == 2) ? 6 : 11; d = ch - c; if (d < 0) d = -d
+                if (d <= 4) b[c] += w * (5 - d) / 5 }
+        }
+        END { best = 1; if (b[6] < b[best]) best = 6; if (b[11] < b[best]) best = 11
+              printf "%d %d networks; busy 1=%d 6=%d 11=%d", best, n, b[1], b[6], b[11] }')
+    c=${r%% *}; case $c in 1|6|11) ;; *) c=1 r="1 (no scan)" ;; esac
+    log "channel: $c, the quietest ($r)"
+    use_freq "$(chan_freq "$c")"
+    CHOSEN=1
+}
+cell_seen() {   # cell_seen SECONDS: a fresh beacon of the BSSID within that time (on its channel: use_freq)
+    _t=$(( $(date +%s) + $1 ))
+    while [ "$(date +%s)" -lt $_t ]; do
+        [ -f "$D/stop" ] && return 1
+        [ -n "$OWNER" ] && ! alive "$OWNER" && return 1   # (the owner gone: the loop restores at once)
+        $W scan freq="$(scan_freqs)" >/dev/null 2>&1
+        sleep 1.5
+        b=$($W bss "$BSSID" 2>/dev/null)
+        a=$(printf '%s\n' "$b" | sed -n 's/^age=//p')
+        if [ -n "$a" ] && [ "$a" -le 2 ]; then
+            f=$(printf '%s\n' "$b" | sed -n 's/^freq=//p')
+            if [ "$AUTO" = 1 ] && [ -n "$f" ]; then
+                [ "$f" != "$FREQ" ] && log "the cell is on $f MHz"
+                use_freq "$f"; CHOSEN=1
+            fi
+            return 0
+        fi
+    done
+    return 1
+}
+join_cell() {   # join_cell SECONDS: the cell looked for, then joined (or started); 0 if found
+    _f=1; cell_seen "$1" && _f=0
+    [ $_f = 1 ] && [ "$AUTO" = 1 ] && [ -z "$CHOSEN" ] && pick_channel
+    # (while the link starts: what it does next, for the apps that show it; only reported, nothing waits on it)
+    [ -n "$REPORT" ] && { if [ $_f = 0 ]; then st_set phase=joining; else st_set phase=starting; fi; }
+    $W enable_network 0 >/dev/null 2>&1; $W reconnect >/dev/null 2>&1
+    i=0; while [ $i -lt 40 ]; do $W status 2>/dev/null | grep -qx wpa_state=COMPLETED && break; [ -f "$D/stop" ] && break; sleep 0.5; i=$((i + 1)); done
+    _af=$($W status 2>/dev/null | sed -n 's/^freq=//p')
+    [ -n "$_af" ] && [ "$_af" != "$FREQ" ] && log "the cell is on $_af MHz, not $FREQ as asked"
+    ip route replace default dev $IF 2>/dev/null
+    return $_f
+}
+# A player's check that the host is still there (every 10 s). Not with broadcasts: 802.11 sends a broadcast once,
+# with no ACK and no retry, and on these handhelds about 1 in 25 is lost (2026-11-22: 151 of 158 ARP broadcasts
+# arrived). arping asks by broadcast until it gets an answer, so both of its two lost now and then, and the link was
+# cut in full play about once an hour (2.5 s without a network: enough to end a game). Now:
+#   1. traffic is proof enough: HEARD_RX packets or more in since the last check (a game in play brings hundreds a
+#      second; with the host gone, the other players' announcements are a handful), and nothing is sent;
+#   2. else a unicast ping, which the radio acknowledges and retries, up to three a second apart (the first answer
+#      is enough); arping only if those find nothing (a host that doesn't answer ICMP);
+#   3. a host heard before is lost only when two checks in a row fail (the second 5 s after the first).
+HEARD_RX=50
+host_probe() {
+    for _p in 1 2 3; do ping -c 1 -W 1 -I $IF 10.42.0.1 >/dev/null 2>&1 && return 0; done
+    arping -q -I $IF -c 2 -w 3 10.42.0.1 >/dev/null 2>&1
+}
+host_heard() {
+    _r=$(rx_count); _d=$((_r - ${hrx:-0})); hrx=$_r
+    [ -n "$heard" ] && [ "$_d" -ge "$HEARD_RX" ] && return 0
+    host_probe
+}
+# A cell alone for 30 s: mac80211 scans for another one to merge with ("No active IBSS STAs ... (merge)"), and on
+# these handhelds (rtw88_8821cs) the cell then stops being heard: a player that comes later sees no beacon, starts a
+# cell of its own and never gets the host's broadcasts (a game's discovery looks for hosts for good; unicast,
+# ARP and ping, still pass). The 2026-10-29 tests: a player within 30 s of the host always found it, one after
+# its first merge scan almost never. So a host that receives nothing (wlan0's rx_packets still) starts its cell
+# again every 20 s, before that scan; a player's cell, if one started its own, is adopted then.
+rx_count() { cat $SYS/$IF/statistics/rx_packets 2>/dev/null || echo 0; }
+renew_cell() { $W disconnect >/dev/null 2>&1; join_cell 0; }
+
+# ---- the supervisor --------------------------------------------------------------------------------------
+LOCKED='' MODE=normal HOME_UP=''
+restore() {
+    trap '' EXIT INT TERM HUP
+    [ -f "$D/restored" ] && return
+    st_set state=stopping
+    log "restore ($MODE): the link's wpa_supplicant stopped"
+    p=$(cat "$D/wpa.pid" 2>/dev/null)
+    if alive "$p"; then
+        kill "$p" 2>/dev/null
+        i=0; while [ $i -lt 10 ] && alive "$p"; do sleep 0.3; i=$((i + 1)); done
+        alive "$p" && kill -9 "$p" 2>/dev/null
+    fi
+    rm -f "$D/wpa.pid" "$CTRL/$IF"
+    ip route flush dev $IF 2>/dev/null; ip addr flush dev $IF 2>/dev/null; ip link set $IF down 2>/dev/null
+    [ -n "$LOCKED" ] && { flock -u 8; exec 8>&-; LOCKED=; }
+    unmount_guard
+    rewrite_settings restore
+    if [ -z "$HOME_UP" ]; then
+        log "restore: BananaOS's Wi-Fi was off before the link: left off"
+    elif [ "$MODE" = sleep ]; then
+        touch "$RUN/wifi-was-up"   # (sleep.d/10-wifi's: Wi-Fi up again after the wake)
+        log "restore: sleeping: the Wi-Fi comes back after the wake (sleep.d/10-wifi)"
+    else
+        # (during a suspend wlan0 is gone for a while: wifi up waits for it, up to 60 s)
+        i=0; while [ ! -d "$SYS/$IF" ] && [ $i -lt 120 ]; do sleep 0.5; i=$((i + 1)); done
+        log "restore: $WIFI up"
+        "$WIFI" up >> "$LOG" 2>&1 9>&- || log "restore: wifi up failed"
+    fi
+    touch "$D/restored"
+    st_set state=down role= ip= phase=   # (msg kept: a failure's reason, for up)
+    rm -f "$D/super.pid" "$D/stop"
+    # the home network back: logged; no address after 25 s, BananaOS's wifi restart once
+    if [ -n "$HOME_UP" ] && [ "$MODE" != sleep ]; then
+        i=0
+        while [ $i -lt 40 ]; do
+            [ -f "$D/super.pid" ] && return   # (a new link meanwhile)
+            a=$(ip -4 -o addr show $IF 2>/dev/null | awk '{print $4}')
+            [ -n "$a" ] && { log "restore: home Wi-Fi back at $a after $i s"; return; }
+            [ $i = 25 ] && { log "restore: no address after 25 s: $WIFI restart"; "$WIFI" restart >> "$LOG" 2>&1 9>&-; }
+            sleep 1; i=$((i + 1))
+        done
+        log "restore: no home address after 40 s (Settings > Network, or a reboot)"
+    fi
+}
+fail() { st_set state=failed msg="$*"; log "failed: $*"; exit 1; }   # (the EXIT trap restores)
+
+supervise() {   # _supervise ROLE OWNER FREQ MAX HOME_UP
+    conf
+    ROLE=$1 OWNER=$2 FREQ=${3:-auto} MAX=$4 HOME_UP=$5
+    AUTO=''; [ "$FREQ" = auto ] && { AUTO=1; FREQ=2412; }   # (the network's first frequency; use_freq moves it)
+    echo $$ > "$D/super.pid"
+    rm -f "$D/restored" "$D/stop"
+    trap 'restore' EXIT
+    # down: the mode in the stop file, then TERM (also while it is still starting)
+    trap 'MODE=$(cat "$D/stop" 2>/dev/null); [ "$MODE" = sleep ] || MODE=normal; log "signal ($MODE): restoring"; exit 0' INT TERM HUP
+    # phase (reported for the apps that show it): leaving (the home Wi-Fi going down), search (the cell looked for),
+    # joining (heard: joined) or starting (not heard: this one starts it), up
+    hw=off; [ -n "$HOME_UP" ] && hw=on
+    st_set state=starting role="$ROLE" ip= freq="$([ "$AUTO" = 1 ] && echo auto || echo "$FREQ")" ssid="$SSID" owner="$OWNER" since="$(date +%s)" msg= phase=leaving home_wifi=$hw
+    # the watchdog: the supervisor gone without its restore (kill -9): the same, from outside
+    setsid sh "$SELF" _watchdog $$ "$HOME_UP" < /dev/null > /dev/null 2>&1 &
+    unmount_guard
+    save_wifi_setting
+    "$WIFI" down >> "$LOG" 2>&1 9>&-
+    mount_guard
+    rewrite_settings off || log "settings: wifi=off was not written"
+    exec 8>"$WIFILOCK"
+    lock_wait 8 10 && LOCKED=1 || fail "BananaOS's Wi-Fi is busy (wifi.lock)"
+    pidof wpa_supplicant >/dev/null && { log "a wpa_supplicant still runs: stopped"; killall wpa_supplicant 2>/dev/null; sleep 0.5; }
+    mkdir -p "$CTRL"
+    cat > "$D/wpa.conf" <<C
+ctrl_interface=$CTRL
+ap_scan=2
+update_config=0
+network={
+    ssid="$SSID"
+    mode=1
+    frequency=$FREQ
+    fixed_freq=1
+    bssid=$BSSID
+    key_mgmt=NONE
+    disabled=1
+}
+C
+    ip addr flush dev $IF 2>/dev/null
+    ip link set $IF up || fail "wlan0 doesn't come up"
+    wpa_supplicant -B -i $IF -c "$D/wpa.conf" -P "$D/wpa.pid" -f "$D/wpa.log" 8>&- 9>&- || fail "wpa_supplicant (IBSS) didn't start"
+    i=0; while [ $i -lt 20 ] && ! $W ping >/dev/null 2>&1; do sleep 0.25; i=$((i + 1)); done
+    if [ "$ROLE" = join ]; then w=15; else w=3; fi
+    st_set phase=search; REPORT=1
+    if join_cell $w; then log "the cell is there: joined"; else log "no cell heard in $w s: this one starts it"; fi
+    REPORT=
+    [ -f "$D/stop" ] && { log "down asked while starting"; exit 0; }
+    $W status 2>/dev/null | grep -qx wpa_state=COMPLETED || fail "no IBSS cell after 20 s (wpa_supplicant: $D/wpa.log)"
+    log "ibss: $($W status 2>/dev/null | grep -e '^bssid' -e '^freq' -e '^ssid' -e '^mode' | tr '\n' ' ')"
+    # (the frequency the cell is really on: mac80211 may adopt an older entry of the BSSID elsewhere than the one asked)
+    af=$($W status 2>/dev/null | sed -n 's/^freq=//p')
+    [ -n "$af" ] && [ "$af" != "$FREQ" ] && { log "the cell came up on $af MHz (asked: $FREQ)"; FREQ=$af; }
+    st_set freq="$FREQ"
+    IP=$(pick_ip "$ROLE") || fail "no free address on the link"
+    set_ip "$IP" || fail "the address $IP couldn't be set"
+    # (a player's phase while up: waiting (the host not heard yet), up (heard), lost (heard before, not now))
+    if [ "$ROLE" = join ]; then st_set state=up ip="$IP" phase=waiting; else st_set state=up ip="$IP" phase=up; fi
+    log "up: $ROLE at $IP, $SSID on $FREQ MHz, owner ${OWNER:-none}, max ${MAX}s"
+    t0=$(date +%s) stopped=0 next=0 tries=0 heard='' had='' lost_t='' rx=$(rx_count) rx_t=$(date +%s) renews=0 hrx='' misses=0
+    while :; do
+        [ -f "$D/stop" ] && { MODE=$(cat "$D/stop" 2>/dev/null); [ "$MODE" = sleep ] || MODE=normal; log "down asked ($MODE)"; break; }
+        if [ -n "$OWNER" ]; then
+            alive "$OWNER" || { log "the owner ($OWNER) is gone: restoring"; break; }
+            s=$(sed 's/^.*) \(.\).*/\1/' /proc/$OWNER/stat 2>/dev/null)
+            if [ "$s" = T ]; then stopped=$((stopped + 1)); else stopped=0; fi
+            [ $stopped -ge 2 ] && { MODE="sleep"; log "the owner is stopped (going to sleep): the link comes down"; break; }
+        fi
+        alive "$(cat "$D/wpa.pid" 2>/dev/null)" || { log "the link's wpa_supplicant died: restoring"; break; }
+        [ "${MAX:-0}" -gt 0 ] && [ $(( $(date +%s) - t0 )) -ge "$MAX" ] && { log "$MAX s are up: restoring"; break; }
+        now=$(date +%s)
+        # the host: which consoles are on the link, for the app (peers, peer_ips): the guests in its ARP table that
+        # answer a unicast ping, every 5 s (a guest checks the host every 10 s, so it is in the table while it's there)
+        if [ "$(st_get ip)" = 10.42.0.1 ] && [ $((now - ${peers_t:-0})) -ge 5 ]; then
+            peers_t=$now ips=
+            for a in $(awk -v i=$IF '$6 == i && $3 == "0x2" && $1 ~ /^10\.42\.0\./ { print $1 }' /proc/net/arp 2>/dev/null); do
+                ping -c 1 -W 1 -I $IF "$a" >/dev/null 2>&1 && ips="${ips:+$ips,}$a"
+            done
+            if [ "$ips" != "$(st_get peer_ips)" ]; then
+                n=0; [ -n "$ips" ] && n=$(printf '%s\n' "$ips" | tr ',' '\n' | grep -c .)
+                st_set peers="$n" peer_ips="$ips"
+                log "host: consoles on the link: ${ips:-none}"
+            fi
+        fi
+        if [ "$(st_get ip)" = 10.42.0.1 ]; then   # the host: its cell started again while nobody is heard
+            r=$(rx_count)
+            if [ "$r" != "$rx" ]; then
+                [ $renews -gt 0 ] && log "host: a player is heard (after $renews new starts of the cell)"
+                rx=$r rx_t=$now renews=0
+            elif [ $((now - rx_t)) -ge 20 ]; then
+                renews=$((renews + 1))
+                [ $renews -eq 1 ] && log "host: nobody heard for 20 s: the cell starts again every 20 s until a player is"
+                if renew_cell; then log "host: another cell heard: joined it"; fi
+                rx=$(rx_count) rx_t=$(date +%s)
+            fi
+        fi
+        if [ "$now" -ge "$next" ] && [ "$(st_get role)" = join ] && [ "$(st_get ip)" != 10.42.0.1 ]; then
+            if host_heard; then
+                [ -n "$heard" ] || log "join: the host answers$([ $tries -gt 0 ] && echo " (after $tries new joins)")"
+                [ -n "$heard" ] || st_set phase=up
+                [ $misses -gt 0 ] && log "join: the host answers again (a check had failed)"
+                heard=1 had=1 lost_t='' tries=0 misses=0 next=$((now + 10))
+            elif [ -n "$heard" ] && [ $misses -eq 0 ]; then
+                # (one failed check: another in 5 s before anything is done)
+                misses=1 next=$((now + 5))
+                log "join: no answer from the host in one check: another in 5 s"
+            else
+                misses=0
+                [ -n "$heard" ] && log "join: the host stopped answering"
+                # a host this player had: lost (the app says so); for LOST_MAX seconds, then the link closes
+                if [ -n "$had" ]; then
+                    [ -n "$lost_t" ] || { lost_t=$now; st_set phase=lost; }
+                    if [ "$LOST_MAX" -gt 0 ] && [ $((now - lost_t)) -ge "$LOST_MAX" ]; then
+                        st_set msg="the host left"
+                        log "join: no host for ${LOST_MAX} s: restoring"; break
+                    fi
+                fi
+                heard='' tries=$((tries + 1))
+                log "join: no answer from the host (10.42.0.1): looking for its cell again ($tries)"
+                # (a lost host: looked for only while LOST_MAX lasts)
+                left=35
+                if [ -n "$lost_t" ] && [ "$LOST_MAX" -gt 0 ]; then
+                    left=$((LOST_MAX - ($(date +%s) - lost_t))); [ $left -gt 35 ] && left=35; [ $left -lt 5 ] && left=5
+                fi
+                $W disconnect >/dev/null 2>&1
+                if join_cell $left; then log "join: a cell heard: joined it"; else log "join: no other cell heard in $left s"; fi
+                next=$(($(date +%s) + 2))
+            fi
+        fi
+        sleep 0.5
+    done
+    exit 0
+}
+
+watchdog() {   # _watchdog SUPER_PID HOME_UP
+    while alive "$1"; do sleep 2; done
+    [ -f "$D/restored" ] && exit 0
+    p=$(cat "$D/super.pid" 2>/dev/null); [ -n "$p" ] && [ "$p" != "$1" ] && exit 0   # (a new link since)
+    log "watchdog: the supervisor $1 is gone without restoring: restoring"
+    p=$(cat "$D/wpa.pid" 2>/dev/null); alive "$p" && kill "$p" 2>/dev/null
+    rm -f "$D/wpa.pid" "$D/super.pid"
+    ip route flush dev $IF 2>/dev/null; ip addr flush dev $IF 2>/dev/null
+    touch "$D/restored"; st_set state=down role= ip= msg="restored by the watchdog"
+    unmount_guard
+    rewrite_settings restore
+    [ -n "$2" ] && "$WIFI" restart >> "$LOG" 2>&1
+    exit 0
+}
+
+# ---- the commands ----------------------------------------------------------------------------------------
+cmd_up() {
+    ROLE=$1; shift
+    case $ROLE in host|join) ;; *) echo "usage: wifi-link up host|join [--owner PID] [--channel N|--freq MHZ] [--max S]" >&2; exit 2 ;; esac
+    conf; OWNER=$BANANA_LINK_OWNER
+    while [ $# -gt 0 ]; do
+        case $1 in
+        --owner) OWNER=$2; shift ;;
+        --channel) CHANNEL=$2; FREQ=; shift ;;   # (auto, or 1-11)
+        --freq) FREQ=$2; shift ;;
+        --max) MAX=$2; shift ;;
+        *) echo "wifi-link: unknown option $1" >&2; exit 2 ;;
+        esac
+        shift
+    done
+    case $MAX in ''|*[!0-9]*) MAX=0 ;; esac
+    case $OWNER in *[!0-9]*) OWNER= ;; esac
+    check_freq || { say "error $WHY"; exit 1; }
+    [ -d $SYS/$IF ] || { say "error no $IF (Wi-Fi driver not loaded)"; exit 1; }
+    # one up/down at a time
+    exec 7>"$D/cmd.lock"; lock_wait 7 30 || { say "error another wifi-link command is running"; exit 1; }
+    if p=$(super_pid) && [ "$(st_get state)" = up ]; then
+        if [ "$(st_get role)" = "$ROLE" ]; then
+            say "ok state=up role=$ROLE ip=$(st_get ip) freq=$(st_get freq) (already up)"; exit 0
+        fi
+        IP=$(pick_ip "$ROLE") || { say "error no free address on the link"; exit 1; }
+        set_ip "$IP" || { say "error the address $IP couldn't be set"; exit 1; }
+        st_set role="$ROLE" ip="$IP"
+        say "ok state=up role=$ROLE ip=$IP freq=$(st_get freq) (role changed)"; exit 0
+    fi
+    if p=$(super_pid); then   # starting or stopping: wait for it to settle, then start afresh
+        echo normal > "$D/stop"; kill -TERM "$p" 2>/dev/null
+        i=0; while [ $i -lt 30 ] && alive "$p"; do sleep 0.5; i=$((i + 1)); done
+    fi
+    # BananaOS's Wi-Fi was on (its wpa_supplicant's pid file): put back afterwards; else left off
+    home=; [ -f "$RUN/wpa.pid" ] && home=1
+    [ -f "$D/home-up" ] && [ ! -f "$D/restored" ] && home=$(cat "$D/home-up")   # (a link left behind)
+    echo "$home" > "$D/home-up"
+    log "=== up $ROLE (owner ${OWNER:-none}, $([ "$FREQ" = auto ] && echo "channel auto" || echo "$FREQ MHz"), home Wi-Fi $([ -n "$home" ] && echo on || echo off))"
+    rm -f "$D/state" "$D/restored"
+    setsid sh "$SELF" _supervise "$ROLE" "$OWNER" "$FREQ" "$MAX" "$home" < /dev/null >> "$LOG" 2>&1 7>&- &
+    i=0
+    while [ $i -lt 100 ]; do
+        s=$(st_get state)
+        case $s in
+        up) say "ok state=up role=$ROLE ip=$(st_get ip) freq=$(st_get freq)"; exit 0 ;;
+        failed|down)
+            if [ -n "$(st_get msg)" ] || [ -f "$D/restored" ]; then
+                m=$(st_get msg); say "error ${m:-stopped before it came up}"; exit 1
+            fi ;;
+        esac
+        sleep 0.5; i=$((i + 1))
+    done
+    say "error the link didn't come up in 50 s"
+    echo normal > "$D/stop"; p=$(super_pid) && kill -TERM "$p" 2>/dev/null
+    exit 1
+}
+
+cmd_down() {
+    mode=normal wait=1
+    for a in "$@"; do case $a in --sleep) mode="sleep" ;; --nowait) wait='' ;; esac; done
+    # (an up still waiting for its link holds the command lock: down doesn't wait for it, the supervisor is told)
+    exec 7>"$D/cmd.lock"; lock_wait 7 2 || log "down: an up is still waiting; going ahead"
+    p=$(super_pid) || { echo "ok state=down"; exit 0; }
+    log "=== down ($mode)"
+    echo $mode > "$D/stop"; kill -TERM "$p" 2>/dev/null
+    [ -n "$wait" ] || { echo "ok state=stopping"; exit 0; }
+    i=0; while [ $i -lt 50 ] && [ ! -f "$D/restored" ]; do sleep 0.3; i=$((i + 1)); done
+    [ -f "$D/restored" ] && { echo "ok state=down"; exit 0; }
+    say "error the link is still coming down"; exit 1
+}
+
+cmd_status() {
+    p=$(super_pid)
+    s=$(st_get state); [ -n "$p" ] || s=down
+    echo "state=${s:-down}"
+    [ -n "$p" ] || exit 0
+    for k in role ip freq ssid owner since msg phase home_wifi; do v=$(st_get $k); [ -n "$v" ] && echo "$k=$v"; done
+    # the other consoles on the link: the host's own check (peers, peer_ips, every 5 s); a guest: the host, while it
+    # answers (phase up)
+    if [ "$(st_get role)" = join ]; then
+        [ "$(st_get phase)" = up ] && echo "peers=1" && echo "peer_ips=10.42.0.1" || echo "peers=0"
+    else
+        echo "peers=$(st_get peers)"; v=$(st_get peer_ips); [ -n "$v" ] && echo "peer_ips=$v"
+    fi
+    exit 0
+}
+
+mkdir -p "$D" "$(dirname "$LOG")" 2>/dev/null
+case $1 in
+up) shift; cmd_up "$@" ;;
+down) shift; cmd_down "$@" ;;
+status) cmd_status ;;
+_supervise) shift; supervise "$@" ;;
+_watchdog) shift; watchdog "$@" ;;
+_setting) shift
+    case ${1:-} in
+        save) save_wifi_setting ;;
+        off) rewrite_settings off ;;
+        restore) rewrite_settings restore ;;
+        *) echo "usage: wifi-link _setting save|off|restore" >&2; exit 2 ;;
+    esac
+    exit 0 ;;
+*) echo "usage: wifi-link up host|join [--owner PID] [--channel N|--freq MHZ] [--max S] | down [--sleep] [--nowait] | status" >&2; exit 2 ;;
+esac

@@ -1,0 +1,49 @@
+Direct Link
+===========
+
+Install (recommended)
+---------------------
+
+**Option A — one file**
+
+1. Copy **Install-Direct-Link.sh** from the release into **store/tiles** on the shared **banana** folder.
+   Do not replace the whole **store** folder.
+2. Reboot once, open **Apps**, and run the installer tile. It adds the app and opens it.
+
+**Option B — zip**
+
+Copy the folder **direct-link** into **store/apps** and **Direct Link.sh** into **store/tiles**.
+Do not replace the whole **store** folder. Reboot once, then open **Apps**.
+
+Where it goes
+-------------
+
+    store/
+      apps/
+        direct-link/
+      tiles/
+        Direct Link.sh
+      (other apps stay here)
+
+One handheld presses Host. The other presses Join.
+If Wi-Fi was on, Disconnect brings it back.
+
+English
+-------
+
+1. On the console: Settings > Network > File sharing > On.
+2. On the computer, open the share named **banana**. Copy into **store** only. Do not replace **store**.
+3. Use Option A or Option B above.
+4. Reboot once. Open **Apps > Direct Link**.
+
+Uninstall: in the app, Y, then A.
+
+Español
+-------
+
+1. En la consola: Ajustes > Red > Compartir archivos > On.
+2. En la computadora, abre el recurso **banana**. Copia solo dentro de **store**. No reemplaces **store**.
+3. Usa la opción A o la B de arriba.
+4. Reinicia una vez. Abre **Apps > Direct Link**.
+
+Desinstalar: en la app, Y y luego A.
