@@ -25,7 +25,7 @@ if [ -n "${CC:-}" ]; then
     fi
     (cd "$ROOT" && "$CC" -O2 -Wall -Wextra ${DRM_INC:+-I"$DRM_INC"} -Icore -I"$UI/include" -I"$UI/third_party" -o "$APP/ui/direct-link" \
         core/view.c "$UI/src/cast.c" "$UI/src/pixel.c" "$UI/src/stb_impl.c" frontends/linux-kms/main.c \
-        "$UI/linux-kms/updater.c" "$UI/linux-kms/pixel_sound.c" -ldrm -lm -ldl -lpthread)
+        "$UI/platform/linux-kms/updater.c" "$UI/platform/linux-kms/pixel_sound.c" -ldrm -lm -ldl -lpthread)
 elif docker image inspect bananads-build:1 >/dev/null 2>&1; then
     # (a pixelado-ui outside the app is mounted read-only beside it)
     docker run --rm --platform linux/amd64 -v "$ROOT:/src:ro" -v "$UI:/pixelado-ui:ro" -v "$APP/ui:/out" -w /src bananads-build:1 \
@@ -34,7 +34,7 @@ elif docker image inspect bananads-build:1 >/dev/null 2>&1; then
         -I/workspace/bananads-lan-test/aarch64--glibc--stable-2025.08-1/aarch64-buildroot-linux-gnu/sysroot/usr/include/libdrm \
         -Icore -I/pixelado-ui/include -I/pixelado-ui/third_party -o /out/direct-link \
         core/view.c /pixelado-ui/src/cast.c /pixelado-ui/src/pixel.c /pixelado-ui/src/stb_impl.c frontends/linux-kms/main.c \
-        /pixelado-ui/linux-kms/updater.c /pixelado-ui/linux-kms/pixel_sound.c -ldrm -lm -ldl -lpthread
+        /pixelado-ui/platform/linux-kms/updater.c /pixelado-ui/platform/linux-kms/pixel_sound.c -ldrm -lm -ldl -lpthread
 else
     echo "set CC to an aarch64 gcc with libdrm, or build where bananads-build:1 exists" >&2
     exit 1

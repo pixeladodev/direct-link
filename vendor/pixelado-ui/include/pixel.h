@@ -160,6 +160,9 @@ enum {
 };
 float px_badge(PxCanvas *c, float x, float y, float h, const char *text, int kind);
 float px_badge_w(const PxCanvas *c, float h, const char *text);
+/* the same without the lamp: the word alone, a little lower */
+float px_badge_plain(PxCanvas *c, float x, float y, float h, const char *text, int kind);
+float px_badge_plain_w(const PxCanvas *c, float h, const char *text);
 /* the same with an animated "..." after the word (0-3 dots), its width kept for all three */
 float px_badge_dots(PxCanvas *c, float x, float y, float h, const char *text, int dots, int kind);
 /* a key cap ("A", "B", "START"); returns its width */

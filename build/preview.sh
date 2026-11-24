@@ -26,6 +26,6 @@ export BANANA_THEMES="${BANANA_THEMES:-$ROOT/dist/no-card-themes}"
 export PREVIEW_STAMP="${PREVIEW_STAMP:-$(TZ=UTC date +%Y%m%d-%H%M)}"
 mkdir -p "$OUT" "$ROOT/dist"
 (cd "$ROOT" && $CC -O2 -Wall -Wextra -Icore -I"$UI/include" -I"$UI/third_party" -o "$ROOT/dist/preview-ui" \
-    frontends/preview/preview.c core/view.c "$UI/src/cast.c" "$UI/src/pixel.c" "$UI/linux-kms/updater.c" \
+    frontends/preview/preview.c core/view.c "$UI/src/cast.c" "$UI/src/pixel.c" "$UI/platform/linux-kms/updater.c" \
     "$UI/src/pixel_png.c" "$UI/src/stb_impl.c" -lm)
 "$ROOT/dist/preview-ui" "$OUT"

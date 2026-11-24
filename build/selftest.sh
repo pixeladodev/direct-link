@@ -9,7 +9,7 @@ bad() { echo "FAIL $1"; fail=1; }
 
 # the vendored pixelado-ui the build compiles from
 [ -s "$ROOT/vendor/pixelado-ui/VERSION" ] || bad "vendor/pixelado-ui/VERSION (run pixelado-ui/tools/vendor.sh)"
-for f in include/pixel.h src/pixel.c src/cast.c linux-kms/updater.c third_party/stb_truetype.h; do
+for f in include/pixel.h src/pixel.c src/cast.c platform/linux-kms/updater.c third_party/stb_truetype.h; do
     [ -f "$ROOT/vendor/pixelado-ui/$f" ] || bad "vendor/pixelado-ui/$f"
 done
 grep -q -- '-dirty' "$ROOT/vendor/pixelado-ui/VERSION" && echo "selftest: vendor/pixelado-ui is from uncommitted pixelado-ui work"

@@ -2,6 +2,7 @@
 #include "pixel_sound.h"
 
 #include <dlfcn.h>
+#include <errno.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -26,6 +27,14 @@ static int (*a_cfg_free)(void);
 #define CH 2
 #define BLOCK (RATE / 100)          /* 10 ms */
 #define QUIET_MS 20000
+/* the device busy (EBUSY) as it is opened: tried again every BUSY_RETRY_MS for up to BUSY_MS, in the sound thread (the
+   app never waits). A game this app ran lets go of it as its process ends, and on the RG DS Plus that last close (the
+   aw88166 amplifiers' stop) runs ~0.6-3.5 s after the game has gone (PaltaDS leaves it to a child that outlives it) */
+#define BUSY_MS 8000
+#define BUSY_RETRY_MS 100
+/* a sound asked for while the device was busy is played once it opens only if it is this recent; else the device
+   opens silent, ready for the next */
+#define STALE_MS 300
 
 typedef struct { const char *name; int16_t *pcm; size_t frames; } Clip;
 static Clip g_clips[] = { { "scroll", 0, 0 }, { "select", 0, 0 }, { "back", 0, 0 }, { "ready", 0, 0 } };
@@ -38,6 +47,8 @@ static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_cv = PTHREAD_COND_INITIALIZER;
 static int g_queued = -1, g_stop, g_close, g_closed = 1;
 static int g_left_open;              /* the thread stopped with the device still open (px_sound_close hands it over) */
+static int g_release_now;            /* px_sound_release: the device closed now (it may take seconds), not left open
+                                        until this process ends */
 
 static long now_ms(void)
 {
@@ -136,17 +147,29 @@ static void *run(void *arg)
     long last = now_ms();
     long long route = route_id();
     int check = 0;
+    int pend = -1;                  /* a clip waiting for the device (busy as it was opened) */
+    long pend_at = 0, busy_since = 0;
     (void)arg;
     for (;;) {
         int q;
         pthread_mutex_lock(&g_mu);
-        while (!pcm && !g_stop && g_queued < 0 && !g_close) pthread_cond_wait(&g_cv, &g_mu);
+        if (!pcm && pend >= 0 && !g_stop && g_queued < 0 && !g_close) {
+            /* (the device busy: the next try in a moment, or sooner for a new sound, a close or the stop) */
+            struct timespec until;
+            clock_gettime(CLOCK_REALTIME, &until);
+            until.tv_nsec += BUSY_RETRY_MS * 1000000L;
+            if (until.tv_nsec >= 1000000000L) { until.tv_sec++; until.tv_nsec -= 1000000000L; }
+            pthread_cond_timedwait(&g_cv, &g_mu, &until);
+        }
+        while (!pcm && pend < 0 && !g_stop && g_queued < 0 && !g_close) pthread_cond_wait(&g_cv, &g_mu);
         if (g_stop) { pthread_mutex_unlock(&g_mu); break; }
         q = g_queued;
         g_queued = -1;
         if (g_close && !cur && q < 0) {
-            /* (quitting: dropped but left open, see px_sound_close) */
-            if (pcm) { a_drop(pcm); g_left_open = 1; pcm = NULL; }
+            pend = -1;
+            busy_since = 0;
+            /* (quitting: dropped but left open, see px_sound_close; px_sound_release closes it for real) */
+            if (pcm) { a_drop(pcm); if (g_release_now) a_close(pcm); else g_left_open = 1; pcm = NULL; }
             g_close = 0;
             g_closed = 1;
             pthread_cond_broadcast(&g_cv);
@@ -154,20 +177,37 @@ static void *run(void *arg)
             continue;
         }
         pthread_mutex_unlock(&g_mu);
-        if (q >= 0) {
+        if (q >= 0) { pend = q; pend_at = now_ms(); }
+        if (pend >= 0) {
             if (!pcm) {
                 long long r = route_id();
+                int e;
                 if (r != route && a_cfg_free) { a_cfg_free(); route = r; }
-                if (a_open(&pcm, "default", PCM_PLAYBACK, 0) < 0) { pcm = NULL; mark_closed(); continue; }
-                if (a_set_params(pcm, PCM_S16_LE, PCM_RW_INTERLEAVED, CH, RATE, 1, 30000) < 0) {
+                e = a_open(&pcm, "default", PCM_PLAYBACK, 0);
+                if (e >= 0 && (e = a_set_params(pcm, PCM_S16_LE, PCM_RW_INTERLEAVED, CH, RATE, 1, 30000)) < 0) {
                     a_close(pcm);
                     pcm = NULL;
+                }
+                if (e < 0) {
+                    long t = now_ms();
+                    pcm = NULL;
+                    if ((e == -EBUSY || e == -EAGAIN) && (!busy_since || t - busy_since < BUSY_MS)) {
+                        if (!busy_since) busy_since = t;
+                        continue;   /* (again in BUSY_RETRY_MS; the clip kept) */
+                    }
+                    if (busy_since) fprintf(stderr, "pixel_sound: the sound device still busy after %ld ms\n", t - busy_since);
+                    busy_since = 0;
+                    pend = -1;
                     mark_closed();
                     continue;
                 }
+                busy_since = 0;
             }
-            cur = &g_clips[q];
-            at = 0;
+            if (now_ms() - pend_at <= STALE_MS) {
+                cur = &g_clips[pend];
+                at = 0;
+            }
+            pend = -1;
             last = now_ms();
         } else if (!cur && now_ms() - last >= QUIET_MS) {
             pthread_mutex_lock(&g_mu);
@@ -203,8 +243,8 @@ static void *run(void *arg)
             }
         }
     }
-    /* (quitting: dropped but left open, see px_sound_close) */
-    if (pcm) { a_drop(pcm); g_left_open = 1; }
+    /* (quitting: dropped but left open, see px_sound_close; px_sound_release closes it for real) */
+    if (pcm) { a_drop(pcm); if (g_release_now) a_close(pcm); else g_left_open = 1; }
     return NULL;
 }
 
@@ -252,6 +292,13 @@ void px_sound_play(const char *name)
     pthread_mutex_unlock(&g_mu);
 }
 
+void px_sound_release(int max_ms)
+{
+    g_release_now = 1;
+    px_sound_close(max_ms);
+    g_release_now = 0;
+}
+
 void px_sound_close(int max_ms)
 {
     struct timespec until;
@@ -269,6 +316,13 @@ void px_sound_close(int max_ms)
     pthread_mutex_unlock(&g_mu);
     pthread_join(g_th, NULL);
     g_started = 0;
+    /* (a px_sound_play after a release starts the thread again: it must not find the stop still asked for, or it ends
+       at once and the app stays silent until it quits) */
+    pthread_mutex_lock(&g_mu);
+    g_stop = 0;
+    g_close = 0;
+    g_queued = -1;
+    pthread_mutex_unlock(&g_mu);
     /* The device was still open (a sound played in the last moments). Closing it can take seconds: the RG DS Plus's
        speaker amplifier (aw88166) needs ~3.5 s in snd_pcm_close (1.8 s on hw:1 itself), a black screen on the way back
        to the menu. So the close is left to a child: it keeps a reference to the device until this process is gone,
@@ -278,7 +332,7 @@ void px_sound_close(int max_ms)
         if (c == 0) {
             int i;
             for (i = 0; i < 3; i++) close(i);   /* (not holding the launcher's pipes) */
-            while (getppid() == parent) usleep(20000);
+            while (!g_release_now && getppid() == parent) usleep(20000);
             _exit(0);
         }
         g_left_open = 0;

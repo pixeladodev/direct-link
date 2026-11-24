@@ -1336,11 +1336,16 @@ static void tone_of(uint32_t base, uint32_t *fill, uint32_t *border, uint32_t *b
 }
 
 /* the state badge on the top panel: a lamp and a word in capitals */
-static float badge_w(const PxCanvas *c, float h, const char *text, int dots)
+static float badge_w_l(const PxCanvas *c, float h, const char *text, int dots, int lamp_on)
 {
     char full[200];
     snprintf(full, sizeof full, "%s%s", text, dots >= 0 ? "..." : "");
-    return h * 0.5f + h * 0.36f + h * 0.3f + px_text_w(c, PX_MEDIUM, h * 0.5f, full, PX_UPPER | PX_TRACK) + h * 0.5f;
+    return h * 0.5f + (lamp_on ? h * 0.36f + h * 0.3f : 0) + px_text_w(c, PX_MEDIUM, h * 0.5f, full, PX_UPPER | PX_TRACK) + h * 0.5f;
+}
+
+static float badge_w(const PxCanvas *c, float h, const char *text, int dots)
+{
+    return badge_w_l(c, h, text, dots, 1);
 }
 
 float px_badge_w(const PxCanvas *c, float h, const char *text)
@@ -1353,10 +1358,10 @@ float px_badge(PxCanvas *c, float x, float y, float h, const char *text, int kin
     return px_badge_dots(c, x, y, h, text, -1, kind);
 }
 
-float px_badge_dots(PxCanvas *c, float x, float y, float h, const char *text, int dots, int kind)
+static float badge_draw(PxCanvas *c, float x, float y, float h, const char *text, int dots, int kind, int with_lamp)
 {
     Box b;
-    float w = badge_w(c, h, text, dots), size = h * 0.5f, lamp = h * 0.36f, lx = x + h * 0.5f;
+    float w = badge_w_l(c, h, text, dots, with_lamp), size = h * 0.5f, lamp = h * 0.36f, lx = x + h * 0.5f;
     uint32_t fill, band, low, edge, lamp_on, ink, base;
     switch (kind) {
     case PX_BADGE_SUCCESS: base = px.green; break;
@@ -1394,15 +1399,34 @@ float px_badge_dots(PxCanvas *c, float x, float y, float h, const char *text, in
     b.inset_bot = low; b.inset_bot_h = 4; b.inset_bot_a = 255;
     b.shadow = 0x000000; b.sdx = 3; b.sdy = 3; b.shadow_a = px.light ? 45 : 200;
     box(c, x, y, w, h, &b);
-    /* the lamp: a lit square with a dark rim (off: unlit) */
-    px_rect(c, lx - 2, y + (h - lamp) / 2 - 2, lamp + 4, lamp + 4, px_mix(low, 0, 0.35f));
-    px_rect(c, lx, y + (h - lamp) / 2, lamp, lamp, lamp_on);
-    if (kind != PX_BADGE_NEUTRAL) px_rect(c, lx + 2, y + (h - lamp) / 2 + 2, lamp * 0.35f, lamp * 0.35f, 0xffffff);
-    if (dots >= 0)
-        px_text_dots(c, PX_MEDIUM, size, lx + lamp + h * 0.3f, y + (h - size * 1.2f) / 2 + 1, text, dots, ink,
-                     PX_UPPER | PX_TRACK, PX_LEFT);
-    else px_text(c, PX_MEDIUM, size, lx + lamp + h * 0.3f, y + (h - size * 1.2f) / 2 + 1, text, ink, PX_UPPER | PX_TRACK);
+    /* the lamp: a lit square with a dark rim (off: unlit); the plain badge has none and its word starts at the left pad */
+    if (with_lamp) {
+        px_rect(c, lx - 2, y + (h - lamp) / 2 - 2, lamp + 4, lamp + 4, px_mix(low, 0, 0.35f));
+        px_rect(c, lx, y + (h - lamp) / 2, lamp, lamp, lamp_on);
+        if (kind != PX_BADGE_NEUTRAL) px_rect(c, lx + 2, y + (h - lamp) / 2 + 2, lamp * 0.35f, lamp * 0.35f, 0xffffff);
+    }
+    {
+        float tx = with_lamp ? lx + lamp + h * 0.3f : lx, ty = y + (h - size * 1.2f) / 2 + 1;
+        if (dots >= 0) px_text_dots(c, PX_MEDIUM, size, tx, ty, text, dots, ink, PX_UPPER | PX_TRACK, PX_LEFT);
+        else px_text(c, PX_MEDIUM, size, tx, ty, text, ink, PX_UPPER | PX_TRACK);
+    }
     return w;
+}
+
+float px_badge_dots(PxCanvas *c, float x, float y, float h, const char *text, int dots, int kind)
+{
+    return badge_draw(c, x, y, h, text, dots, kind, 1);
+}
+
+/* a badge without the lamp (just the word), and its width */
+float px_badge_plain(PxCanvas *c, float x, float y, float h, const char *text, int kind)
+{
+    return badge_draw(c, x, y, h, text, -1, kind, 0);
+}
+
+float px_badge_plain_w(const PxCanvas *c, float h, const char *text)
+{
+    return badge_w_l(c, h, text, -1, 0);
 }
 
 static float g_face_size = 19;    /* the face buttons' label size (px_faces makes it smaller to fit a row) */
