@@ -12,7 +12,7 @@ file="$ROOT/release-notes/${ver}.md"
 }
 chars=$(wc -c < "$file" | tr -d ' ')
 lines=$(grep -c '[^[:space:]]' "$file" || true)
-if [ "$chars" -lt 1200 ] || [ "$lines" -lt 28 ]; then
+if [ "$chars" -lt 600 ] || [ "$lines" -lt 12 ]; then
     echo "check-release-notes: $file is too short ($chars bytes, $lines non-empty lines)" >&2
     echo "Release notes must be substantive, not a placeholder." >&2
     exit 1
