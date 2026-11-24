@@ -29,7 +29,7 @@ static int (*a_cfg_free)(void);
 #define QUIET_MS 20000
 /* the device busy (EBUSY) as it is opened: tried again every BUSY_RETRY_MS for up to BUSY_MS, in the sound thread (the
    app never waits). A game this app ran lets go of it as its process ends, and on the RG DS Plus that last close (the
-   aw88166 amplifiers' stop) runs ~0.6-3.5 s after the game has gone (PaltaDS leaves it to a child that outlives it) */
+   aw88166 amplifiers' stop) runs ~0.6-3.5 s after the game has gone (the DS core leaves it to a child that outlives it) */
 #define BUSY_MS 8000
 #define BUSY_RETRY_MS 100
 /* a sound asked for while the device was busy is played once it opens only if it is this recent; else the device
