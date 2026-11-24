@@ -1,0 +1,3 @@
+[submodule "vendor/pixelado-ui"]
+	path = vendor/pixelado-ui
+	url = https://github.com/pixeladodev/pixelado-ui.git

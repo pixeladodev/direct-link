@@ -6,8 +6,9 @@
 set -eu
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 [ -f "$ROOT/preview.env" ] && set -a && . "$ROOT/preview.env" && set +a
-# the pixelado-ui library: the vendored copy, or a live working copy (PIXELADO_UI_DIR=../pixelado-ui)
-UI=$(CDPATH= cd -- "${PIXELADO_UI_DIR:-$ROOT/vendor/pixelado-ui}" && pwd) || { echo "no pixelado-ui at ${PIXELADO_UI_DIR:-vendor/pixelado-ui}" >&2; exit 1; }
+# the pixelado-ui library: the vendor/pixelado-ui submodule, or a live working copy (PIXELADO_UI_DIR=../pixelado-ui)
+UI=$(CDPATH= cd -- "${PIXELADO_UI_DIR:-$ROOT/vendor/pixelado-ui}" && pwd) || { echo "no pixelado-ui at ${PIXELADO_UI_DIR:-vendor/pixelado-ui} (run: git submodule update --init)" >&2; exit 1; }
+[ -f "$UI/include/pixel.h" ] || { echo "$UI is empty (run: git submodule update --init)" >&2; exit 1; }
 OUT=${1:-$ROOT/dist/preview}
 CC=${HOST_CC:-cc}
 if [ -z "${PIXEL_UI_FONTS:-}" ]; then

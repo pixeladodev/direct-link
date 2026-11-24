@@ -19,7 +19,7 @@ Trademarks
 
 Third-party parts, under their own licences
   platforms/bananaos/app/wifi-link is adapted from BananaLinux's wifi-link (MIT).
-  vendor/pixelado-ui's renderer follows the look of BananaOS's own menus and apps from
+  pixelado-ui's renderer follows the look of BananaOS's own menus and apps from
   BananaLinux (MIT): the palette and accents of settings_pal.cpp, the row and key-hint
   layout of RndsUI.cpp, and the box painter of the Activity app (store/apps/activity).
   Copyright (c) 2026 JorreFog and the Banana contributors. MIT License:

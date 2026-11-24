@@ -9,8 +9,9 @@ ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 ver=$(sed -n 's/^app_version=//p' "$ROOT/manifest" | head -n 1 | tr -d '\r')
 [ -n "$ver" ] || { echo "manifest needs app_version" >&2; exit 1; }
 
-# the pixelado-ui library: the vendored copy, or a live working copy (PIXELADO_UI_DIR=../pixelado-ui)
-UI=$(CDPATH= cd -- "${PIXELADO_UI_DIR:-$ROOT/vendor/pixelado-ui}" && pwd) || { echo "no pixelado-ui at ${PIXELADO_UI_DIR:-vendor/pixelado-ui}" >&2; exit 1; }
+# the pixelado-ui library: the vendor/pixelado-ui submodule, or a live working copy (PIXELADO_UI_DIR=../pixelado-ui)
+UI=$(CDPATH= cd -- "${PIXELADO_UI_DIR:-$ROOT/vendor/pixelado-ui}" && pwd) || { echo "no pixelado-ui at ${PIXELADO_UI_DIR:-vendor/pixelado-ui} (run: git submodule update --init)" >&2; exit 1; }
+[ -f "$UI/include/pixel.h" ] || { echo "$UI is empty (run: git submodule update --init)" >&2; exit 1; }
 
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT

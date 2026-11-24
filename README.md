@@ -85,9 +85,10 @@ Optional file `/data/banana/direct-link.conf` (read only): `CHANNEL` (`auto` by 
 
 Source available under the PolyForm Strict License 1.0.0, with permission to redistribute the unmodified official
 releases; see `LICENSE` and `NOTICE`. The screens are C in `core/view.c` on Pixelado's shared pixel renderer,
-[pixelado-ui](../pixelado-ui), vendored in `vendor/pixelado-ui/` (its `VERSION` says which commit), so this repo builds on its
-own; to work on both at once, run any build script with `PIXELADO_UI_DIR=../pixelado-ui` (for example
-`PIXELADO_UI_DIR=../pixelado-ui build/preview.sh`) and sync the copy with `pixelado-ui/tools/vendor.sh .` when it is committed.
+[pixelado-ui](https://github.com/pixeladodev/pixelado-ui), a git submodule in `vendor/pixelado-ui/`: clone with
+`git clone --recursive`, or run `git submodule update --init` after a plain clone. To work on both at once, run any build
+script with `PIXELADO_UI_DIR=../pixelado-ui` (for example `PIXELADO_UI_DIR=../pixelado-ui build/preview.sh`); to bump the
+library, commit the new submodule pointer.
 The handheld program is `frontends/linux-kms/`, and what BananaOS needs is in `platforms/bananaos/` (`app/wifi-link`
 drives the radio). How the screens behave: `docs/UX.md`. The characters (Nilo, Lumi and Pixo here) are pixel maps in
 pixelado-ui's `characters/characters.py`. Screenshots: `build/preview.sh`. Package: `build/package.sh`; checks:

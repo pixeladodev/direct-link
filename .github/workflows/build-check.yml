@@ -14,6 +14,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - name: Require quality release notes
         run: bash build/check-release-notes.sh
       - name: Compile the app and pack the zip
